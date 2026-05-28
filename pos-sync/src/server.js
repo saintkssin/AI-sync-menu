@@ -105,7 +105,7 @@ app.post('/api/match', async (req, res) => {
 async function callGemini(prompt, isRetry = false) {
   const body = {
     contents: [{ parts: [{ text: prompt }] }],
-    generationConfig: { temperature: 0.1, maxOutputTokens: 8192, responseMimeType: 'application/json' }
+    generationConfig: { temperature: 0.1, maxOutputTokens: 8192 }
   };
 
   const resp = await fetch(GEMINI_URL, {
