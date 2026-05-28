@@ -19,20 +19,13 @@ app.get('/health', (req, res) => res.json({ ok: true }));
 // ─── OAuth callback від Choice ───────────────────────────────────
 app.get('/callback', async (req, res) => {
   const { code } = req.query;
-
-  if (!code) {
-    return res.status(400).send('Missing code');
-  }
+  if (!code) return res.status(400).send('Missing code');
 
   try {
     const r = await fetch('https://open-api.choiceqr.com/auth/connect/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        code,
-        clientId: CHOICE_CLIENT_ID,
-        secret: CHOICE_CLIENT_SECRET
-      })
+      body: JSON.stringify({ code, clientId: CHOICE_CLIENT_ID, secret: CHOICE_CLIENT_SECRET })
     });
 
     if (!r.ok) {
@@ -41,24 +34,59 @@ app.get('/callback', async (req, res) => {
     }
 
     const data = await r.json();
-    const { token, varSymbol, domain } = data;
-
-    // Редиректимо на головну з токеном — користувач побачить його в інтерфейсі
+    const { token, domain } = data;
     res.redirect(`/?token=${encodeURIComponent(token)}&domain=${encodeURIComponent(domain)}`);
-
   } catch (err) {
-    console.error('Callback error:', err.message);
     res.status(500).send('Server error: ' + err.message);
   }
 });
 
-// ─── Main match endpoint ─────────────────────────────────────────
+// ─── Choice API proxy ─────────────────────────────────────────────
+// Фронтенд викликає /api/choice/* з токеном в хедері
+// Бекенд проксює запит до open-api.choiceqr.com без CORS проблем
+app.all('/api/choice/*', async (req, res) => {
+  const token = req.headers['x-choice-token'];
+  if (!token) return res.status(401).json({ error: 'Missing x-choice-token header' });
+
+  // Вирізаємо /api/choice/ і отримуємо решту шляху
+  const choicePath = req.path.replace('/api/choice', '');
+  const url = `https://open-api.choiceqr.com${choicePath}${req.query && Object.keys(req.query).length ? '?' + new URLSearchParams(req.query) : ''}`;
+
+  try {
+    const fetchOpts = {
+      method: req.method,
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      }
+    };
+
+    if (['POST', 'PUT', 'PATCH'].includes(req.method)) {
+      fetchOpts.body = JSON.stringify(req.body);
+    }
+
+    const r = await fetch(url, fetchOpts);
+    const contentType = r.headers.get('content-type') || '';
+
+    if (r.status === 204) return res.status(204).send();
+
+    if (contentType.includes('application/json')) {
+      const data = await r.json();
+      return res.status(r.status).json(data);
+    }
+
+    const text = await r.text();
+    return res.status(r.status).send(text);
+  } catch (err) {
+    console.error('Choice proxy error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Gemini match endpoint ────────────────────────────────────────
 app.post('/api/match', async (req, res) => {
   const { choiceDishes, posDishes, choiceCategories, posCategories, choiceOptionItems, posModifierItems } = req.body;
-
-  if (!choiceDishes || !posDishes) {
-    return res.status(400).json({ error: 'Missing required data' });
-  }
+  if (!choiceDishes || !posDishes) return res.status(400).json({ error: 'Missing required data' });
 
   const prompt = buildPrompt(choiceDishes, posDishes, choiceCategories, posCategories, choiceOptionItems, posModifierItems);
 
@@ -66,20 +94,16 @@ app.post('/api/match', async (req, res) => {
     const parsed = await callGemini(prompt);
     res.json(parsed);
   } catch (err) {
-    console.error('Gemini API error:', err.message);
+    console.error('Gemini error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
-// ─── Gemini call ─────────────────────────────────────────────────
+// ─── Gemini call ──────────────────────────────────────────────────
 async function callGemini(prompt, isRetry = false) {
   const body = {
     contents: [{ parts: [{ text: prompt }] }],
-    generationConfig: {
-      temperature: 0.1,
-      maxOutputTokens: 8192,
-      responseMimeType: 'application/json'
-    }
+    generationConfig: { temperature: 0.1, maxOutputTokens: 8192, responseMimeType: 'application/json' }
   };
 
   const resp = await fetch(GEMINI_URL, {
@@ -88,27 +112,21 @@ async function callGemini(prompt, isRetry = false) {
     body: JSON.stringify(body)
   });
 
-  if (!resp.ok) {
-    const err = await resp.text();
-    throw new Error(`Gemini HTTP ${resp.status}: ${err}`);
-  }
+  if (!resp.ok) throw new Error(`Gemini HTTP ${resp.status}: ${await resp.text()}`);
 
   const data = await resp.json();
   const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
   const clean = text.replace(/```json|```/g, '').trim();
 
-  let parsed;
   try {
-    parsed = JSON.parse(clean);
+    return JSON.parse(clean);
   } catch (e) {
     if (isRetry) throw new Error('Gemini returned invalid JSON after retry');
-    return callGemini(prompt + '\n\nВАЖЛИВО: поверни ТІЛЬКИ валідний JSON, без тексту, без markdown, без пояснень.', true);
+    return callGemini(prompt + '\n\nВАЖЛИВО: поверни ТІЛЬКИ валідний JSON.', true);
   }
-
-  return parsed;
 }
 
-// ─── Prompt builder ──────────────────────────────────────────────
+// ─── Prompt builder ───────────────────────────────────────────────
 function buildPrompt(choiceDishes, posDishes, choiceCategories, posCategories, choiceOptionItems, posModifierItems) {
   return `Ти — асистент для матчингу меню між двома системами. Зіставляй позиції за ДВОМА критеріями:
 
@@ -119,45 +137,23 @@ function buildPrompt(choiceDishes, posDishes, choiceCategories, posCategories, c
 - "high": ціна збігається + назва дуже схожа або ідентична
 - "medium": ціна збігається + назва схожа але є суттєві відмінності
 
-ВАЖЛИВО:
-- Включай тільки знайдені матчі, нематчі не включай
-- Для страв і опцій: ціни в однакових одиницях (гривні)
-- Назви можуть мати різний регістр, зайві пробіли, позначки NEW, скорочення
+ВАЖЛИВО: включай тільки знайдені матчі. Ціни в гривнях.
 
-СТРАВИ CHOICE (id, name, price грн, categoryName):
-${JSON.stringify(choiceDishes.slice(0, 500))}
+СТРАВИ CHOICE: ${JSON.stringify(choiceDishes.slice(0, 500))}
+СТРАВИ POS: ${JSON.stringify(posDishes.slice(0, 500))}
+КАТЕГОРІЇ CHOICE: ${JSON.stringify(choiceCategories)}
+КАТЕГОРІЇ POS: ${JSON.stringify(posCategories)}
+ОПЦІЇ CHOICE: ${JSON.stringify((choiceOptionItems || []).slice(0, 300))}
+МОДИФІКАТОРИ POS: ${JSON.stringify((posModifierItems || []).slice(0, 300))}
 
-СТРАВИ POS (posId, name, price грн):
-${JSON.stringify(posDishes.slice(0, 500))}
-
-КАТЕГОРІЇ CHOICE (id, name):
-${JSON.stringify(choiceCategories)}
-
-КАТЕГОРІЇ POS (posId, name):
-${JSON.stringify(posCategories)}
-
-ОПЦІЇ CHOICE (groupId, itemId, name, price грн):
-${JSON.stringify((choiceOptionItems || []).slice(0, 300))}
-
-МОДИФІКАТОРИ POS (posId, name, price грн):
-${JSON.stringify((posModifierItems || []).slice(0, 300))}
-
-Поверни ТІЛЬКИ JSON без жодного тексту і без markdown:
+Поверни ТІЛЬКИ JSON:
 {
-  "dishes": [
-    {"choiceId":"...","posId":"...","choiceName":"...","posName":"...","price":0,"confidence":"high|medium"}
-  ],
-  "categories": [
-    {"choiceId":"...","posId":"...","choiceName":"...","posName":"...","confidence":"high|medium"}
-  ],
-  "optionItems": [
-    {"choiceGroupId":"...","choiceItemId":"...","posItemId":"...","choiceName":"...","posName":"...","price":0,"confidence":"high|medium"}
-  ]
+  "dishes": [{"choiceId":"...","posId":"...","choiceName":"...","posName":"...","price":0,"confidence":"high|medium"}],
+  "categories": [{"choiceId":"...","posId":"...","choiceName":"...","posName":"...","confidence":"high|medium"}],
+  "optionItems": [{"choiceGroupId":"...","choiceItemId":"...","posItemId":"...","choiceName":"...","posName":"...","price":0,"confidence":"high|medium"}]
 }`;
 }
 
-// ─── Start ───────────────────────────────────────────────────────
+// ─── Start ────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`✓ POS-Sync server running on http://localhost:${PORT}`);
-});
+app.listen(PORT, () => console.log(`✓ POS-Sync server on http://localhost:${PORT}`));
