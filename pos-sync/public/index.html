@@ -524,8 +524,8 @@
         <div class="panel-title">Choice API Token</div>
       </div>
       <div class="panel-body">
-        <div class="alert alert-info" style="margin-bottom:16px">
-          ℹ Введи API-токен від кабінету Choice. Його можна знайти в налаштуваннях аккаунту.
+        <div id="authInfo" class="alert alert-info" style="margin-bottom:16px">
+          ℹ Введи API-токен від кабінету Choice або підключись через OAuth.
         </div>
         <div class="input-group">
           <label class="input-label">API Token</label>
@@ -1317,6 +1317,24 @@ function downloadReport() {
   XLSX.utils.book_append_sheet(wb, ws, 'Sync Report');
   XLSX.writeFile(wb, 'pos-choice-sync-report.xlsx');
 }
+
+// ===================== AUTO-READ TOKEN FROM URL =====================
+(function() {
+  const params = new URLSearchParams(window.location.search);
+  const token = params.get('token');
+  const domain = params.get('domain');
+  if (token) {
+    document.getElementById('tokenInput').value = token;
+    if (domain) {
+      document.getElementById('authInfo').textContent = `✓ Підключено: ${domain}`;
+      document.getElementById('authInfo').className = 'alert alert-success';
+    }
+    // Очистити URL
+    window.history.replaceState({}, '', '/');
+    // Авто-підключитись
+    setTimeout(() => connectToken(), 300);
+  }
+})();
 
 // ===================== RESET =====================
 function resetAll() {
