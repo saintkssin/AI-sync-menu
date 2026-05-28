@@ -52,6 +52,7 @@ app.all('/api/choice/*', async (req, res) => {
   const choicePath = req.path.replace('/api/choice', '');
   const url = `https://open-api.choiceqr.com${choicePath}${req.query && Object.keys(req.query).length ? '?' + new URLSearchParams(req.query) : ''}`;
 
+  console.log(`[PROXY] ${req.method} ${url} token=${token.substring(0,8)}...`);
   try {
     const fetchOpts = {
       method: req.method,
@@ -68,6 +69,7 @@ app.all('/api/choice/*', async (req, res) => {
     const r = await fetch(url, fetchOpts);
     const contentType = r.headers.get('content-type') || '';
 
+    console.log(`[PROXY] Response: ${r.status}`);
     if (r.status === 204) return res.status(204).send();
 
     if (contentType.includes('application/json')) {
