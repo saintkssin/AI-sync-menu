@@ -1,7 +1,6 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const Anthropic = require('@anthropic-ai/sdk');
 const path = require('path');
 
 const app = express();
@@ -9,10 +8,49 @@ app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, '../public')));
 
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const CHOICE_CLIENT_ID = process.env.CHOICE_CLIENT_ID;
+const CHOICE_CLIENT_SECRET = process.env.CHOICE_CLIENT_SECRET;
+const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
 
 // ─── Health check ────────────────────────────────────────────────
 app.get('/health', (req, res) => res.json({ ok: true }));
+
+// ─── OAuth callback від Choice ───────────────────────────────────
+app.get('/callback', async (req, res) => {
+  const { code } = req.query;
+
+  if (!code) {
+    return res.status(400).send('Missing code');
+  }
+
+  try {
+    const r = await fetch('https://open-api.choiceqr.com/auth/connect/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        code,
+        clientId: CHOICE_CLIENT_ID,
+        secret: CHOICE_CLIENT_SECRET
+      })
+    });
+
+    if (!r.ok) {
+      const err = await r.text();
+      return res.status(400).send('Token exchange failed: ' + err);
+    }
+
+    const data = await r.json();
+    const { token, varSymbol, domain } = data;
+
+    // Редиректимо на головну з токеном — користувач побачить його в інтерфейсі
+    res.redirect(`/?token=${encodeURIComponent(token)}&domain=${encodeURIComponent(domain)}`);
+
+  } catch (err) {
+    console.error('Callback error:', err.message);
+    res.status(500).send('Server error: ' + err.message);
+  }
+});
 
 // ─── Main match endpoint ─────────────────────────────────────────
 app.post('/api/match', async (req, res) => {
@@ -25,39 +63,50 @@ app.post('/api/match', async (req, res) => {
   const prompt = buildPrompt(choiceDishes, posDishes, choiceCategories, posCategories, choiceOptionItems, posModifierItems);
 
   try {
-    const message = await client.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 8000,
-      messages: [{ role: 'user', content: prompt }]
-    });
-
-    const text = message.content.map(c => c.text || '').join('');
-    const clean = text.replace(/```json|```/g, '').trim();
-
-    let parsed;
-    try {
-      parsed = JSON.parse(clean);
-    } catch (e) {
-      // retry once with explicit re-prompt
-      const retry = await client.messages.create({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 8000,
-        messages: [
-          { role: 'user', content: prompt },
-          { role: 'assistant', content: text },
-          { role: 'user', content: 'Поверни ТІЛЬКИ валідний JSON, без тексту, без markdown.' }
-        ]
-      });
-      const retryText = retry.content.map(c => c.text || '').join('').replace(/```json|```/g, '').trim();
-      parsed = JSON.parse(retryText);
-    }
-
+    const parsed = await callGemini(prompt);
     res.json(parsed);
   } catch (err) {
-    console.error('Claude API error:', err.message);
+    console.error('Gemini API error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
+
+// ─── Gemini call ─────────────────────────────────────────────────
+async function callGemini(prompt, isRetry = false) {
+  const body = {
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: {
+      temperature: 0.1,
+      maxOutputTokens: 8192,
+      responseMimeType: 'application/json'
+    }
+  };
+
+  const resp = await fetch(GEMINI_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+
+  if (!resp.ok) {
+    const err = await resp.text();
+    throw new Error(`Gemini HTTP ${resp.status}: ${err}`);
+  }
+
+  const data = await resp.json();
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  const clean = text.replace(/```json|```/g, '').trim();
+
+  let parsed;
+  try {
+    parsed = JSON.parse(clean);
+  } catch (e) {
+    if (isRetry) throw new Error('Gemini returned invalid JSON after retry');
+    return callGemini(prompt + '\n\nВАЖЛИВО: поверни ТІЛЬКИ валідний JSON, без тексту, без markdown, без пояснень.', true);
+  }
+
+  return parsed;
+}
 
 // ─── Prompt builder ──────────────────────────────────────────────
 function buildPrompt(choiceDishes, posDishes, choiceCategories, posCategories, choiceOptionItems, posModifierItems) {
