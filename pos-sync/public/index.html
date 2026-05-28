@@ -703,11 +703,12 @@ const API_BASE = 'https://open-api.choiceqr.com';
 
 // ===================== HELPERS =====================
 function api(method, path, body) {
-  return fetch(API_BASE + path, {
+  // Всі запити до Choice йдуть через наш бекенд-проксі
+  return fetch('/api/choice' + path, {
     method,
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': 'Bearer ' + state.token
+      'x-choice-token': state.token
     },
     body: body ? JSON.stringify(body) : undefined
   });
@@ -752,8 +753,8 @@ async function connectToken() {
 
   try {
     // Test token by fetching section info
-    const r = await fetch(API_BASE + '/menu/' + state.language + '/sections/list', {
-      headers: { 'Authorization': 'Bearer ' + token }
+    const r = await fetch('/api/choice/menu/' + state.language + '/sections/list', {
+      headers: { 'x-choice-token': token }
     });
     if (!r.ok) {
       showAlert('authError', 'Невірний токен або помилка сервера: ' + r.status, 'error');
@@ -778,8 +779,8 @@ async function loadChoiceMenu() {
 
   try {
     // 1. Get sections
-    const secR = await fetch(API_BASE + '/menu/' + state.language + '/sections/list', {
-      headers: { 'Authorization': 'Bearer ' + state.token }
+    const secR = await fetch('/api/choice/menu/' + state.language + '/sections/list', {
+      headers: { 'x-choice-token': state.token }
     });
     const sections = await secR.json();
     if (!Array.isArray(sections) || sections.length === 0) {
@@ -791,16 +792,16 @@ async function loadChoiceMenu() {
 
     for (const sec of sections) {
       // Categories
-      const catR = await fetch(API_BASE + '/menu/' + state.language + '/categories/list/' + sec._id, {
-        headers: { 'Authorization': 'Bearer ' + state.token }
+      const catR = await fetch('/api/choice/menu/' + state.language + '/categories/list/' + sec._id, {
+        headers: { 'x-choice-token': state.token }
       });
       const cats = await catR.json();
       if (Array.isArray(cats)) {
         allCategories.push(...cats);
         // Dishes per category
         for (const cat of cats) {
-          const dishR = await fetch(API_BASE + '/menu/' + state.language + '/dishes/list/' + cat._id, {
-            headers: { 'Authorization': 'Bearer ' + state.token }
+          const dishR = await fetch('/api/choice/menu/' + state.language + '/dishes/list/' + cat._id, {
+            headers: { 'x-choice-token': state.token }
           });
           const dishes = await dishR.json();
           if (Array.isArray(dishes)) {
@@ -811,8 +812,8 @@ async function loadChoiceMenu() {
         }
       }
       // Options
-      const optR = await fetch(API_BASE + '/menu/' + state.language + '/options/list/' + sec._id, {
-        headers: { 'Authorization': 'Bearer ' + state.token }
+      const optR = await fetch('/api/choice/menu/' + state.language + '/options/list/' + sec._id, {
+        headers: { 'x-choice-token': state.token }
       });
       const opts = await optR.json();
       if (Array.isArray(opts)) allOptions.push(...opts);
