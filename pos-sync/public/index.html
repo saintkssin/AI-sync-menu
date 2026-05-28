@@ -752,7 +752,7 @@ async function connectToken() {
 
   try {
     // Test token by fetching section info
-    const r = await fetch(API_BASE + '/menu/' + state.language + '/sections', {
+    const r = await fetch(API_BASE + '/menu/' + state.language + '/sections/list', {
       headers: { 'Authorization': 'Bearer ' + token }
     });
     if (!r.ok) {
@@ -778,7 +778,7 @@ async function loadChoiceMenu() {
 
   try {
     // 1. Get sections
-    const secR = await fetch(API_BASE + '/menu/' + state.language + '/sections', {
+    const secR = await fetch(API_BASE + '/menu/' + state.language + '/sections/list', {
       headers: { 'Authorization': 'Bearer ' + state.token }
     });
     const sections = await secR.json();
