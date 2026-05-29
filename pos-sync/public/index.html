@@ -1302,10 +1302,13 @@ async function applyItem(item) {
     const cur = await gr.json();
     // Update posID for specific item — прибираємо _id з optionList (Choice не приймає)
     const newOptList = (cur.optionList || []).map(o => {
-      const { _id, ...rest } = o;
       return {
-        ...rest,
-        posID: _id === item.choiceId ? item.posId : (o.posID || null)
+        name: o.name,
+        price: o.price,
+        active: o.active,
+        default: o.default,
+        max: o.max,
+        posID: o._id === item.choiceId ? item.posId : (o.posID || null)
       };
     });
     const r = await api('PUT', `/menu/${lang}/options/${item.choiceGroupId}`, {
