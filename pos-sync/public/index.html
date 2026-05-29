@@ -223,7 +223,7 @@
   .file-drop-text { color: var(--text2); font-size: 13px; }
   .file-drop-text strong { color: var(--accent); }
   .file-drop-hint { font-size: 11px; color: var(--text3); margin-top: 4px; font-family: var(--mono); }
-  input[type="file"] { display: none; }
+  input[type="file"] { display: none !important; position: absolute; width: 0; height: 0; overflow: hidden; }
 
   /* STATS ROW */
   .stats-row {
@@ -839,17 +839,25 @@ function handleFile(file) {
     const rows = XLSX.utils.sheet_to_json(ws, { header: 1 });
 
     const headers = rows[0];
-    const posIdCol    = headers.indexOf('POS ID');
-    const nameCol     = headers.indexOf('Dish name');
-    const catCol      = headers.indexOf('Category');
-    const priceCol    = headers.indexOf('Price');
-    const catPosIdCol = headers.indexOf('Category POS ID');
+    // Знаходимо колонки по назві
+    const posIdCol    = headers.findIndex(h => String(h).trim() === 'POS ID');
+    const nameCol     = headers.findIndex(h => String(h).trim() === 'Dish name');
+    const catCol      = headers.findIndex(h => String(h).trim() === 'Category');
+    const priceCol    = headers.findIndex(h => String(h).trim() === 'Price');
+    const catPosIdCol = headers.findIndex(h => String(h).trim() === 'Category POS ID');
 
-    const dishes = [], modifiers = [];
+    console.log('Headers:', headers);
+    console.log('Cols:', {posIdCol, nameCol, catCol, priceCol, catPosIdCol});
+
+    const dishes = [];
+    // Для модифікаторів беремо тільки прості (Modificators) — вони унікальні
+    // Multi ([Modificators] Назва) — ті самі але з прив'язкою до страви, використовуємо для отримання groupChoicePosId
+    const simpleModifiers = {};  // itemPosId → {posId, name, price}
+    const multiModifiers  = {};  // groupChoicePosId (M...) → [{itemPosId, name, price}]
 
     for (let i = 1; i < rows.length; i++) {
       const row = rows[i];
-      if (!row || !row[posIdCol]) continue;
+      if (!row || row[posIdCol] === undefined || row[posIdCol] === null || String(row[posIdCol]).trim() === '') continue;
 
       const posId    = String(row[posIdCol] || '').trim();
       const name     = String(row[nameCol]  || '').trim();
@@ -857,57 +865,65 @@ function handleFile(file) {
       const price    = parseFloat(row[priceCol]) || 0;
       const catPosId = String(row[catPosIdCol] || '').trim();
 
+      // Multi модифікатор — [Modificators] Назва страви
       if (cat.startsWith('[Modificators]')) {
-        const dishName = cat.replace('[Modificators]', '').trim();
         const [groupId, itemId] = posId.includes('**') ? posId.split('**') : [posId, posId];
-        modifiers.push({
-          groupPosId: groupId, itemPosId: itemId,
-          name: name.replace(/^Multi\s+/i, '').trim(),
-          price, dishName, groupChoicePosId: catPosId, multiType: true
-        });
+        const cleanName = name.replace(/^Multi\s+/i, '').trim();
+        const groupKey = catPosId; // M2450caa9-...
+        if (!multiModifiers[groupKey]) multiModifiers[groupKey] = [];
+        multiModifiers[groupKey].push({ itemPosId: itemId, groupPosId: groupId, name: cleanName, price });
         continue;
       }
 
+      // Простий модифікатор — Category = "Modificators"
       if (cat === 'Modificators') {
         const [groupId, itemId] = posId.includes('**') ? posId.split('**') : [posId, posId];
-        modifiers.push({
-          groupPosId: groupId, itemPosId: itemId,
-          name, price, dishName: '', groupChoicePosId: catPosId || 'modificators', multiType: false
-        });
+        if (!simpleModifiers[itemId]) {
+          simpleModifiers[itemId] = { posId: itemId, groupPosId: groupId, name, price };
+        }
         continue;
       }
 
+      // Звичайна страва
       dishes.push({ posId, name, category: cat, price, categoryPosId: catPosId });
     }
 
+    // Унікальні категорії
     const catMap = {};
     dishes.forEach(d => { catMap[d.categoryPosId] = d.category; });
     const categories = Object.entries(catMap).map(([id, name]) => ({ posId: id, name }));
 
-    const modGroupMap = {};
-    modifiers.forEach(m => {
-      const key = m.multiType ? m.groupChoicePosId : m.groupPosId;
-      if (!modGroupMap[key]) {
-        modGroupMap[key] = { groupPosId: m.groupPosId, choicePosId: key, dishName: m.dishName, items: [] };
-      }
-      modGroupMap[key].items.push({ itemPosId: m.itemPosId, name: m.name, price: m.price });
-    });
+    // Список унікальних modItems для матчингу
+    const modItemsList = Object.values(simpleModifiers);
 
-    const uniqModItems = {};
-    modifiers.forEach(m => {
-      if (!uniqModItems[m.itemPosId]) {
-        uniqModItems[m.itemPosId] = { posId: m.itemPosId, name: m.name, price: m.price };
-      }
-    });
+    // Групи модифікаторів для застосування (з Multi)
+    // groupChoicePosId (M...) → список itemPosId
+    const modGroups = Object.entries(multiModifiers).map(([groupChoicePosId, items]) => ({
+      groupChoicePosId,
+      items
+    }));
 
-    state.posMenu = { categories, dishes, modifierGroups: Object.values(modGroupMap), rawModifiers: modifiers };
+    state.posMenu = {
+      categories,
+      dishes,
+      modifierGroups: modGroups,
+      modItemsList,   // для матчингу
+      rawModifiers: [...Object.values(simpleModifiers), ...Object.values(multiModifiers).flat()]
+    };
+
+    console.log('POS parsed:', {
+      categories: categories.length,
+      dishes: dishes.length,
+      modGroups: modGroups.length,
+      modItems: modItemsList.length
+    });
 
     document.getElementById('posStats').classList.remove('hidden');
     document.getElementById('posStatsRow').innerHTML = `
       <div class="stat-card"><div class="stat-value">${categories.length}</div><div class="stat-label">Категорій</div></div>
       <div class="stat-card"><div class="stat-value">${dishes.length}</div><div class="stat-label">Страв</div></div>
-      <div class="stat-card"><div class="stat-value">${Object.keys(modGroupMap).length}</div><div class="stat-label">Груп опцій</div></div>
-      <div class="stat-card"><div class="stat-value">${Object.keys(uniqModItems).length}</div><div class="stat-label">Опцій</div></div>
+      <div class="stat-card"><div class="stat-value">${modGroups.length}</div><div class="stat-label">Груп опцій</div></div>
+      <div class="stat-card"><div class="stat-value">${modItemsList.length}</div><div class="stat-label">Опцій</div></div>
     `;
   };
   reader.readAsArrayBuffer(file);
@@ -993,13 +1009,8 @@ async function callClaudeMatch(choiceDishes, posDishes, choiceCats, posCats, cho
     });
   });
   // Унікальні модифікатори POS для матчингу
-  const posModItemsUniq = {};
-  posMods.forEach(m => {
-    if (!posModItemsUniq[m.itemPosId]) {
-      posModItemsUniq[m.itemPosId] = { posId: m.itemPosId, name: m.name, price: m.price };
-    }
-  });
-  const posModItemList = Object.values(posModItemsUniq).slice(0, 300);
+  // Беремо готовий список унікальних modItems з парсера
+  const posModItemList = (state.posMenu.modItemsList || []).slice(0, 300);
 
   const resp = await fetch('/api/match', {
     method: 'POST',
