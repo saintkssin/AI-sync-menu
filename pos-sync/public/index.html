@@ -839,69 +839,68 @@ function handleFile(file) {
     const rows = XLSX.utils.sheet_to_json(ws, { header: 1 });
 
     const headers = rows[0];
-    const posIdCol = headers.indexOf('POS ID');
-    const nameCol = headers.indexOf('Dish name');
-    const catCol = headers.indexOf('Category');
-    const priceCol = headers.indexOf('Price');
+    const posIdCol    = headers.indexOf('POS ID');
+    const nameCol     = headers.indexOf('Dish name');
+    const catCol      = headers.indexOf('Category');
+    const priceCol    = headers.indexOf('Price');
     const catPosIdCol = headers.indexOf('Category POS ID');
 
     const dishes = [], modifiers = [];
+
     for (let i = 1; i < rows.length; i++) {
       const row = rows[i];
       if (!row || !row[posIdCol]) continue;
-      const posId = String(row[posIdCol] || '').trim();
-      const name = String(row[nameCol] || '').trim();
-      const cat = String(row[catCol] || '').trim();
-      const price = parseFloat(row[priceCol]) || 0;
+
+      const posId    = String(row[posIdCol] || '').trim();
+      const name     = String(row[nameCol]  || '').trim();
+      const cat      = String(row[catCol]   || '').trim();
+      const price    = parseFloat(row[priceCol]) || 0;
       const catPosId = String(row[catPosIdCol] || '').trim();
 
       if (cat.startsWith('[Modificators]')) {
-        // modifier row — POS ID is "groupID**itemID"
+        const dishName = cat.replace('[Modificators]', '').trim();
         const [groupId, itemId] = posId.includes('**') ? posId.split('**') : [posId, posId];
-        const dishName = cat.replace('[Modificators] ', '').trim();
         modifiers.push({
-          groupPosId: groupId,
-          itemPosId: itemId,
-          name,
-          price,
-          dishName,
-          groupChoicePosId: catPosId
+          groupPosId: groupId, itemPosId: itemId,
+          name: name.replace(/^Multi\s+/i, '').trim(),
+          price, dishName, groupChoicePosId: catPosId, multiType: true
         });
-      } else {
-        dishes.push({ posId, name, category: cat, price, categoryPosId: catPosId });
+        continue;
       }
+
+      if (cat === 'Modificators') {
+        const [groupId, itemId] = posId.includes('**') ? posId.split('**') : [posId, posId];
+        modifiers.push({
+          groupPosId: groupId, itemPosId: itemId,
+          name, price, dishName: '', groupChoicePosId: catPosId || 'modificators', multiType: false
+        });
+        continue;
+      }
+
+      dishes.push({ posId, name, category: cat, price, categoryPosId: catPosId });
     }
 
-    // Unique categories from POS
     const catMap = {};
     dishes.forEach(d => { catMap[d.categoryPosId] = d.category; });
     const categories = Object.entries(catMap).map(([id, name]) => ({ posId: id, name }));
 
-    // Unique modifier groups
     const modGroupMap = {};
     modifiers.forEach(m => {
-      if (!modGroupMap[m.groupChoicePosId]) {
-        modGroupMap[m.groupChoicePosId] = {
-          groupPosId: m.groupPosId,
-          choicePosId: m.groupChoicePosId,
-          items: []
-        };
+      const key = m.multiType ? m.groupChoicePosId : m.groupPosId;
+      if (!modGroupMap[key]) {
+        modGroupMap[key] = { groupPosId: m.groupPosId, choicePosId: key, dishName: m.dishName, items: [] };
       }
-      modGroupMap[m.groupChoicePosId].items.push({
-        itemPosId: m.itemPosId, name: m.name, price: m.price
-      });
+      modGroupMap[key].items.push({ itemPosId: m.itemPosId, name: m.name, price: m.price });
     });
 
-    state.posMenu = {
-      categories,
-      dishes,
-      modifierGroups: Object.values(modGroupMap),
-      rawModifiers: modifiers
-    };
-
-    // Unique modifier items
     const uniqModItems = {};
-    modifiers.forEach(m => { uniqModItems[m.itemPosId] = { posId: m.itemPosId, name: m.name, price: m.price }; });
+    modifiers.forEach(m => {
+      if (!uniqModItems[m.itemPosId]) {
+        uniqModItems[m.itemPosId] = { posId: m.itemPosId, name: m.name, price: m.price };
+      }
+    });
+
+    state.posMenu = { categories, dishes, modifierGroups: Object.values(modGroupMap), rawModifiers: modifiers };
 
     document.getElementById('posStats').classList.remove('hidden');
     document.getElementById('posStatsRow').innerHTML = `
@@ -993,8 +992,13 @@ async function callClaudeMatch(choiceDishes, posDishes, choiceCats, posCats, cho
       choiceOptItems.push({ groupId: og._id, itemId: item._id, name: item.name, price: Math.round(item.price / 100) });
     });
   });
+  // Унікальні модифікатори POS для матчингу
   const posModItemsUniq = {};
-  posMods.forEach(m => { posModItemsUniq[m.itemPosId] = { posId: m.itemPosId, name: m.name, price: m.price }; });
+  posMods.forEach(m => {
+    if (!posModItemsUniq[m.itemPosId]) {
+      posModItemsUniq[m.itemPosId] = { posId: m.itemPosId, name: m.name, price: m.price };
+    }
+  });
   const posModItemList = Object.values(posModItemsUniq).slice(0, 300);
 
   const resp = await fetch('/api/match', {
