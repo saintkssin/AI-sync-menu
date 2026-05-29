@@ -1300,11 +1300,14 @@ async function applyItem(item) {
     const gr = await api('GET', `/menu/${lang}/options/${item.choiceGroupId}`);
     if (!gr.ok) throw new Error('GET HTTP ' + gr.status);
     const cur = await gr.json();
-    // Update posID for specific item in optionList
-    const newOptList = (cur.optionList || []).map(o => ({
-      ...o,
-      posID: o._id === item.choiceId ? item.posId : (o.posID || undefined)
-    }));
+    // Update posID for specific item — прибираємо _id з optionList (Choice не приймає)
+    const newOptList = (cur.optionList || []).map(o => {
+      const { _id, ...rest } = o;
+      return {
+        ...rest,
+        posID: _id === item.choiceId ? item.posId : (o.posID || null)
+      };
+    });
     const r = await api('PUT', `/menu/${lang}/options/${item.choiceGroupId}`, {
       name: cur.name,
       type: cur.type,
