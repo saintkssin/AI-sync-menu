@@ -811,12 +811,21 @@ async function loadChoiceMenu() {
           }
         }
       }
-      // Options
+      // Options — спочатку отримуємо список, потім для кожної тягнемо повний об'єкт з optionList
       const optR = await fetch('/api/choice/menu/' + state.language + '/options/list/' + sec._id, {
         headers: { 'x-choice-token': state.token }
       });
       const opts = await optR.json();
-      if (Array.isArray(opts)) allOptions.push(...opts);
+      if (Array.isArray(opts)) {
+        for (const opt of opts) {
+          const fullR = await fetch('/api/choice/menu/' + state.language + '/options/' + opt._id, {
+            headers: { 'x-choice-token': state.token }
+          });
+          const fullOpt = await fullR.json();
+          if (fullOpt && fullOpt._id) allOptions.push(fullOpt);
+          else allOptions.push(opt);
+        }
+      }
     }
 
     state.choiceMenu = { categories: allCategories, dishes: allDishes, options: allOptions };
