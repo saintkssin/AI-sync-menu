@@ -1253,18 +1253,41 @@ async function applySync() {
   document.getElementById('applyLog').innerHTML = '';
   let done = 0, errors = 0;
 
-  for (const item of toApply) {
+  // Групуємо option items по choiceGroupId — один PUT на групу
+  const dishes    = toApply.filter(i => i.type === 'dish');
+  const cats      = toApply.filter(i => i.type === 'category');
+  const optItems  = toApply.filter(i => i.type === 'option');
+
+  // Збираємо всі зміни для кожної групи опцій
+  const optGroups = {};
+  optItems.forEach(item => {
+    if (!optGroups[item.choiceGroupId]) optGroups[item.choiceGroupId] = [];
+    optGroups[item.choiceGroupId].push({ choiceItemId: item.choiceId, posId: item.posId, name: item.choiceName });
+  });
+
+  const allTasks = [
+    ...dishes,
+    ...cats,
+    ...Object.entries(optGroups).map(([groupId, items]) => ({ type: 'optionGroup', choiceGroupId: groupId, items }))
+  ];
+
+  for (const item of allTasks) {
     try {
       await applyItem(item);
       done++;
-      addApplyLog(item.choiceName, 'ok');
+      if (item.type === 'optionGroup') {
+        addApplyLog(`Група опцій (${item.items.length} елементів)`, 'ok');
+      } else {
+        addApplyLog(item.choiceName, 'ok');
+      }
     } catch(e) {
       errors++;
-      addApplyLog(item.choiceName + ' — ' + e.message, 'fail');
+      const name = item.type === 'optionGroup' ? `Група опцій` : item.choiceName;
+      addApplyLog(name + ' — ' + e.message, 'fail');
     }
-    const pct = Math.round(((done + errors) / toApply.length) * 100);
+    const pct = Math.round(((done + errors) / allTasks.length) * 100);
     document.getElementById('applyProgress').style.width = pct + '%';
-    document.getElementById('applyLabel').textContent = `${done + errors} / ${toApply.length}`;
+    document.getElementById('applyLabel').textContent = `${done + errors} / ${allTasks.length}`;
   }
 
   document.getElementById('applyDone').classList.remove('hidden');
@@ -1295,22 +1318,25 @@ async function applyItem(item) {
     });
     if (!r.ok) throw new Error('HTTP ' + r.status);
 
-  } else if (item.type === 'option') {
-    // Need full PUT on group — fetch current first
+  } else if (item.type === 'optionGroup') {
+    // Один PUT для всієї групи з усіма posID одразу
     const gr = await api('GET', `/menu/${lang}/options/${item.choiceGroupId}`);
     if (!gr.ok) throw new Error('GET HTTP ' + gr.status);
     const cur = await gr.json();
-    // Update posID for specific item — прибираємо _id з optionList (Choice не приймає)
-    const newOptList = (cur.optionList || []).map(o => {
-      return {
-        name: o.name,
-        price: o.price,
-        active: o.active,
-        default: o.default,
-        max: o.max,
-        posID: o._id === item.choiceId ? item.posId : (o.posID || null)
-      };
-    });
+
+    // Будуємо map choiceItemId → posId для всіх змін цієї групи
+    const posIdMap = {};
+    item.items.forEach(i => { posIdMap[i.choiceItemId] = i.posId; });
+
+    const newOptList = (cur.optionList || []).map(o => ({
+      name: o.name,
+      price: o.price,
+      active: o.active,
+      default: o.default,
+      max: o.max,
+      posID: posIdMap[o._id] !== undefined ? posIdMap[o._id] : (o.posID || null)
+    }));
+
     const r = await api('PUT', `/menu/${lang}/options/${item.choiceGroupId}`, {
       name: cur.name,
       type: cur.type,
