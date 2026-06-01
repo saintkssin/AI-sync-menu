@@ -974,6 +974,7 @@ function setSyncProgress(pct, label) {
 // ===================== GEMINI MATCH =====================
 async function callGeminiMatch(choiceDishes, posDishes, choiceCats, posCats, choiceOpts, posModGroups, posMods) {
   // Функція для витягування назви з об'єктів Choice
+  console.log("РЕАЛЬНА СТРУКТУРА СТРАВИ CHOICE:", choiceDishes[0]);
   const getChoiceName = (item, defaultFallback) => {
     if (item.name && item.name.trim()) return item.name.trim();
     if (item.nameLocalizations) {
