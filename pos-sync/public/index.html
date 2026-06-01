@@ -973,19 +973,48 @@ function setSyncProgress(pct, label) {
 
 // ===================== GEMINI MATCH =====================
 async function callGeminiMatch(choiceDishes, posDishes, choiceCats, posCats, choiceOpts, posModGroups, posMods) {
+  // Функція для витягування назви з об'єктів Choice
+  const getChoiceName = (item, defaultFallback) => {
+    if (item.name && item.name.trim()) return item.name.trim();
+    if (item.nameLocalizations) {
+      const loc = item.nameLocalizations;
+      if (loc.uk && loc.uk.trim()) return loc.uk.trim();
+      if (loc.en && loc.en.trim()) return loc.en.trim();
+      if (loc.ru && loc.ru.trim()) return loc.ru.trim();
+      // Якщо є хоч якась мова, беремо її
+      const firstKey = Object.keys(loc)[0];
+      if (firstKey && loc[firstKey] && loc[firstKey].trim()) return loc[firstKey].trim();
+    }
+    return defaultFallback;
+  };
+
   const choiceDishList = choiceDishes.map(d => ({
-    choiceId: d._id, name: d.name, price: Math.round(d.price / 100), categoryName: d.categoryName || '', posID: d.posID
+    id: d._id, 
+    name: getChoiceName(d, 'Dish'), 
+    price: Math.round(d.price / 100), 
+    categoryName: d.categoryName || ''
   }));
+  
   const posDishList = posDishes.map(d => ({
     posId: d.posId, name: d.name, price: d.price
   }));
-  const choiceCatList = choiceCats.map(c => ({ choiceId: c._id, name: c.name, posID: c.posID }));
+  
+  const choiceCatList = choiceCats.map(c => ({ 
+    id: c._id, 
+    name: getChoiceName(c, 'Category') 
+  }));
+  
   const posCatList = posCats.map(c => ({ posId: c.posId, name: c.name }));
 
   const choiceOptItems = [];
   choiceOpts.forEach(og => {
     (og.optionList || []).forEach(item => {
-      choiceOptItems.push({ choiceGroupId: og._id, choiceItemId: item._id, name: item.name, price: Math.round(item.price / 100) });
+      choiceOptItems.push({ 
+        groupId: og._id, 
+        itemId: item._id, 
+        name: getChoiceName(item, 'Option'), 
+        price: Math.round(item.price / 100) 
+      });
     });
   });
   const posModItemList = (state.posMenu.modItemsList || []);
@@ -1032,15 +1061,15 @@ async function callGeminiMatch(choiceDishes, posDishes, choiceCats, posCats, cho
   const unmatched = [];
   choiceDishes.forEach(d => {
     if (!matchedDishIds.has(d._id)) {
-      unmatched.push({ type: 'dish', categoryId: d.category, categoryName: d.categoryName || 'Без категорії', choiceId: d._id, choiceName: d.name, price: Math.round(d.price / 100), reason: 'Не знайдено відповідність' });
+      unmatched.push({ type: 'dish', categoryId: d.category, categoryName: d.categoryName || 'Без категорії', choiceId: d._id, choiceName: getChoiceName(d, 'Без назви'), price: Math.round(d.price / 100), reason: 'Не знайдено відповідність' });
     }
   });
   choiceCats.forEach(c => {
-    if (!matchedCatIds.has(c._id)) unmatched.push({ type: 'category', choiceId: c._id, choiceName: c.name, reason: 'Не знайдено відповідність' });
+    if (!matchedCatIds.has(c._id)) unmatched.push({ type: 'category', choiceId: c._id, choiceName: getChoiceName(c, 'Без назви'), reason: 'Не знайдено відповідність' });
   });
   choiceOpts.forEach(og => {
     (og.optionList || []).forEach(item => {
-      if (!matchedOptIds.has(item._id)) unmatched.push({ type: 'option', choiceId: item._id, choiceName: item.name, price: Math.round(item.price / 100), reason: 'Не знайдено відповідність' });
+      if (!matchedOptIds.has(item._id)) unmatched.push({ type: 'option', choiceId: item._id, choiceName: getChoiceName(item, 'Без назви'), price: Math.round(item.price / 100), reason: 'Не знайдено відповідність' });
     });
   });
 
