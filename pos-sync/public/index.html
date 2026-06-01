@@ -25,7 +25,7 @@
     --sans: 'IBM Plex Sans', sans-serif;
   }
 
-  * { box-sizing: border-box; margin: 0; padding: 0; }
+  * { box-shrink: border-box; margin: 0; padding: 0; box-sizing: border-box; }
 
   body {
     background: var(--bg);
@@ -493,7 +493,6 @@
 
 <div class="main">
 
-  <!-- STEPS -->
   <div class="steps">
     <div class="step active" id="step0">
       <div class="step-num">0</div>
@@ -517,7 +516,6 @@
     </div>
   </div>
 
-  <!-- SCREEN 0: AUTH -->
   <div id="screen0">
     <div class="panel">
       <div class="panel-header">
@@ -540,7 +538,6 @@
     </div>
   </div>
 
-  <!-- SCREEN 1: POS FILE -->
   <div id="screen1" class="hidden">
     <div class="panel">
       <div class="panel-header">
@@ -565,7 +562,6 @@
     </div>
   </div>
 
-  <!-- SCREEN 2: SYNCING -->
   <div id="screen2" class="hidden">
     <div class="panel">
       <div class="panel-header">
@@ -577,11 +573,15 @@
           <div class="progress-bar" id="syncProgress" style="width:0%"></div>
         </div>
         <div class="progress-label" id="syncLabel">Підготовка...</div>
+        
+        <div id="retrySyncWrap" class="hidden" style="margin-top:16px; display:flex; justify-content:flex-end; gap:8px;">
+          <button class="btn btn-ghost" onclick="resetAll()">← Назад</button>
+          <button class="btn btn-primary" onclick="runSync()">🔄 Повторити спробу</button>
+        </div>
       </div>
     </div>
   </div>
 
-  <!-- SCREEN 3: RESULTS -->
   <div id="screen3" class="hidden">
     <div class="panel">
       <div class="panel-header">
@@ -602,7 +602,6 @@
         </div>
       </div>
 
-      <!-- MATCHED -->
       <div id="tabContentMatched">
         <div class="table-wrap">
           <table>
@@ -622,7 +621,6 @@
         </div>
       </div>
 
-      <!-- REVIEW -->
       <div id="tabContentReview" class="hidden">
         <div class="table-wrap">
           <table>
@@ -642,7 +640,6 @@
         </div>
       </div>
 
-      <!-- UNMATCHED -->
       <div id="tabContentUnmatched" class="hidden">
         <div id="unmatchedBody" style="padding:16px 20px"></div>
         <div id="unmatchedEmpty" class="empty hidden"><div class="empty-icon">🎉</div>Всі позиції знайдено!</div>
@@ -658,7 +655,6 @@
     </div>
   </div>
 
-  <!-- SCREEN 4: APPLYING -->
   <div id="screen4" class="hidden">
     <div class="panel">
       <div class="panel-header">
@@ -829,7 +825,6 @@ async function loadChoiceMenu() {
     }
 
     state.choiceMenu = { categories: allCategories, dishes: allDishes, options: allOptions };
-    const total = allCategories.length + allDishes.length + allOptions.length;
     document.getElementById('choiceMenuInfo').textContent =
       `Choice: ${allCategories.length} кат. / ${allDishes.length} страв / ${allOptions.length} опцій`;
 
@@ -848,19 +843,17 @@ function handleFile(file) {
     const rows = XLSX.utils.sheet_to_json(ws, { header: 1 });
 
     const headers = rows[0];
-    // Знаходимо колонки по назві
-    const posIdCol    = headers.findIndex(h => String(h).trim() === 'POS ID');
-    const nameCol     = headers.findIndex(h => String(h).trim() === 'Dish name');
-    const catCol      = headers.findIndex(h => String(h).trim() === 'Category');
-    const priceCol    = headers.findIndex(h => String(h).trim() === 'Price');
-    const catPosIdCol = headers.findIndex(h => String(h).trim() === 'Category POS ID');
+    // ОНОВЛЕННЯ: Гнучкий та універсальний пошук колонок
+    const posIdCol    = headers.findIndex(h => /pos id|id/i.test(String(h).trim()));
+    const nameCol     = headers.findIndex(h => /dish name|назва|название|name/i.test(String(h).trim()));
+    const catCol      = headers.findIndex(h => /category|категорія|категория/i.test(String(h).trim()));
+    const priceCol    = headers.findIndex(h => /price|ціна|цена/i.test(String(h).trim()));
+    const catPosIdCol = headers.findIndex(h => /category pos id|id категорії|id категории/i.test(String(h).trim()));
 
     console.log('Headers:', headers);
     console.log('Cols:', {posIdCol, nameCol, catCol, priceCol, catPosIdCol});
 
     const dishes = [];
-    // Для модифікаторів беремо тільки прості (Modificators) — вони унікальні
-    // Multi ([Modificators] Назва) — ті самі але з прив'язкою до страви, використовуємо для отримання groupChoicePosId
     const simpleModifiers = {};  // itemPosId → {posId, name, price}
     const multiModifiers  = {};  // groupChoicePosId (M...) → [{itemPosId, name, price}]
 
@@ -906,7 +899,6 @@ function handleFile(file) {
     const modItemsList = Object.values(simpleModifiers);
 
     // Групи модифікаторів для застосування (з Multi)
-    // groupChoicePosId (M...) → список itemPosId
     const modGroups = Object.entries(multiModifiers).map(([groupChoicePosId, items]) => ({
       groupChoicePosId,
       items
@@ -916,16 +908,9 @@ function handleFile(file) {
       categories,
       dishes,
       modifierGroups: modGroups,
-      modItemsList,   // для матчингу
+      modItemsList,
       rawModifiers: [...Object.values(simpleModifiers), ...Object.values(multiModifiers).flat()]
     };
-
-    console.log('POS parsed:', {
-      categories: categories.length,
-      dishes: dishes.length,
-      modGroups: modGroups.length,
-      modItems: modItemsList.length
-    });
 
     document.getElementById('posStats').classList.remove('hidden');
     document.getElementById('posStatsRow').innerHTML = `
@@ -962,6 +947,7 @@ async function goToSync() {
 async function runSync() {
   const log = document.getElementById('syncLog');
   log.innerHTML = '';
+  document.getElementById('retrySyncWrap').classList.add('hidden'); // Ховаємо кнопку ретраю при новому запуску
 
   addSyncLog('Підготовка даних...');
   setSyncProgress(5, 'Підготовка даних...');
@@ -972,11 +958,11 @@ async function runSync() {
   addSyncLog(`Choice: ${choiceCats.length} кат, ${choiceDishes.length} страв, ${choiceOpts.length} опцій`, 'ok');
   addSyncLog(`POS: ${posCats.length} кат, ${posDishes.length} страв, ${posModGroups.length} груп опцій`);
 
-  setSyncProgress(15, 'Надсилання до Claude AI...');
-  addSyncLog('Запит до Claude AI для матчингу...');
+  setSyncProgress(15, 'Надсилання до Gemini AI...');
+  addSyncLog('Запит до Gemini AI для матчингу...');
 
   try {
-    const matchResult = await callClaudeMatch(choiceDishes, posDishes, choiceCats, posCats, choiceOpts, posModGroups, posMods);
+    const matchResult = await callGeminiMatch(choiceDishes, posDishes, choiceCats, posCats, choiceOpts, posModGroups, posMods);
     setSyncProgress(85, 'Обробка результатів...');
     addSyncLog('Відповідь отримано, обробляємо...', 'ok');
 
@@ -991,6 +977,7 @@ async function runSync() {
   } catch(e) {
     addSyncLog('Помилка AI: ' + e.message, 'err');
     setSyncProgress(0, 'Помилка');
+    document.getElementById('retrySyncWrap').classList.remove('hidden'); // ОНОВЛЕННЯ: Показуємо кнопку ретраю при помилці
   }
 }
 
@@ -999,9 +986,8 @@ function setSyncProgress(pct, label) {
   document.getElementById('syncLabel').textContent = label;
 }
 
-// ===================== CLAUDE MATCH =====================
-async function callClaudeMatch(choiceDishes, posDishes, choiceCats, posCats, choiceOpts, posModGroups, posMods) {
-  // Build compact data for API
+// ===================== GEMINI MATCH =====================
+async function callGeminiMatch(choiceDishes, posDishes, choiceCats, posCats, choiceOpts, posModGroups, posMods) {
   const choiceDishList = choiceDishes.slice(0, 500).map(d => ({
     id: d._id, name: d.name, price: Math.round(d.price / 100), categoryName: d.categoryName || '', posID: d.posID
   }));
@@ -1017,8 +1003,6 @@ async function callClaudeMatch(choiceDishes, posDishes, choiceCats, posCats, cho
       choiceOptItems.push({ groupId: og._id, itemId: item._id, name: item.name, price: Math.round(item.price / 100) });
     });
   });
-  // Унікальні модифікатори POS для матчингу
-  // Беремо готовий список унікальних modItems з парсера
   const posModItemList = (state.posMenu.modItemsList || []).slice(0, 300);
 
   const resp = await fetch('/api/match', {
@@ -1040,10 +1024,7 @@ async function callClaudeMatch(choiceDishes, posDishes, choiceCats, posCats, cho
   }
   const parsed = await resp.json();
 
-  // Build results
   const matched = [], review = [];
-
-  // Dishes
   const matchedDishIds = new Set();
   (parsed.dishes || []).forEach(m => {
     matchedDishIds.add(m.choiceId);
@@ -1052,7 +1033,6 @@ async function callClaudeMatch(choiceDishes, posDishes, choiceCats, posCats, cho
     else review.push({ ...item, approved: null });
   });
 
-  // Categories
   const matchedCatIds = new Set();
   (parsed.categories || []).forEach(m => {
     matchedCatIds.add(m.choiceId);
@@ -1061,7 +1041,6 @@ async function callClaudeMatch(choiceDishes, posDishes, choiceCats, posCats, cho
     else review.push({ ...item, approved: null });
   });
 
-  // Option items
   const matchedOptIds = new Set();
   (parsed.optionItems || []).forEach(m => {
     matchedOptIds.add(m.choiceItemId);
@@ -1070,7 +1049,6 @@ async function callClaudeMatch(choiceDishes, posDishes, choiceCats, posCats, cho
     else review.push({ ...item, approved: null });
   });
 
-  // Unmatched
   const unmatched = [];
   choiceDishes.forEach(d => {
     if (!matchedDishIds.has(d._id)) {
@@ -1101,7 +1079,6 @@ function renderResults() {
   document.getElementById('countReview').textContent = review.length;
   document.getElementById('countUnmatched').textContent = unmatched.length;
 
-  // Matched table
   const mb = document.getElementById('matchedBody');
   mb.innerHTML = '';
   if (matched.length === 0) {
@@ -1119,7 +1096,6 @@ function renderResults() {
     });
   }
 
-  // Review table
   const rb = document.getElementById('reviewBody');
   rb.innerHTML = '';
   if (review.length === 0) {
@@ -1140,13 +1116,11 @@ function renderResults() {
     });
   }
 
-  // Unmatched
   const ub = document.getElementById('unmatchedBody');
   ub.innerHTML = '';
   if (unmatched.length === 0) {
     document.getElementById('unmatchedEmpty').classList.remove('hidden');
   } else {
-    // 1. Категорії без матчу
     const unmatchedCats = unmatched.filter(u => u.type === 'category');
     if (unmatchedCats.length > 0) {
       ub.innerHTML += `<div class="section-title">Категорії без відповідності (${unmatchedCats.length})</div>`;
@@ -1158,10 +1132,8 @@ function renderResults() {
       });
     }
 
-    // 2. Страви — згруповані по категоріях Choice
     const unmatchedDishes = unmatched.filter(u => u.type === 'dish');
     if (unmatchedDishes.length > 0) {
-      // Зібрати унікальні категорії
       const catGroups = {};
       unmatchedDishes.forEach(u => {
         const key = u.categoryId || 'no-cat';
@@ -1187,7 +1159,6 @@ function renderResults() {
       });
     }
 
-    // 3. Опції без матчу
     const unmatchedOpts = unmatched.filter(u => u.type === 'option');
     if (unmatchedOpts.length > 0) {
       ub.innerHTML += `<div class="section-title" style="margin-top:8px">Опції без відповідності (${unmatchedOpts.length})</div>`;
@@ -1253,12 +1224,10 @@ async function applySync() {
   document.getElementById('applyLog').innerHTML = '';
   let done = 0, errors = 0;
 
-  // Групуємо option items по choiceGroupId — один PUT на групу
   const dishes    = toApply.filter(i => i.type === 'dish');
   const cats      = toApply.filter(i => i.type === 'category');
   const optItems  = toApply.filter(i => i.type === 'option');
 
-  // Збираємо всі зміни для кожної групи опцій
   const optGroups = {};
   optItems.forEach(item => {
     if (!optGroups[item.choiceGroupId]) optGroups[item.choiceGroupId] = [];
@@ -1305,7 +1274,6 @@ async function applyItem(item) {
     if (!r.ok) throw new Error('HTTP ' + r.status);
 
   } else if (item.type === 'category') {
-    // Need full PUT — fetch current data first
     const gr = await api('GET', `/menu/${lang}/categories/${item.choiceId}`);
     if (!gr.ok) throw new Error('GET HTTP ' + gr.status);
     const cur = await gr.json();
@@ -1319,12 +1287,10 @@ async function applyItem(item) {
     if (!r.ok) throw new Error('HTTP ' + r.status);
 
   } else if (item.type === 'optionGroup') {
-    // Один PUT для всієї групи з усіма posID одразу
     const gr = await api('GET', `/menu/${lang}/options/${item.choiceGroupId}`);
     if (!gr.ok) throw new Error('GET HTTP ' + gr.status);
     const cur = await gr.json();
 
-    // Будуємо map choiceItemId → posId для всіх змін цієї групи
     const posIdMap = {};
     item.items.forEach(i => { posIdMap[i.choiceItemId] = i.posId; });
 
@@ -1386,9 +1352,7 @@ function downloadReport() {
       document.getElementById('authInfo').textContent = `✓ Підключено: ${domain}`;
       document.getElementById('authInfo').className = 'alert alert-success';
     }
-    // Очистити URL
     window.history.replaceState({}, '', '/');
-    // Авто-підключитись
     setTimeout(() => connectToken(), 300);
   }
 })();
@@ -1403,6 +1367,7 @@ function resetAll() {
   document.getElementById('syncLog').innerHTML = '';
   document.getElementById('applyLog').innerHTML = '';
   document.getElementById('applyDone').classList.add('hidden');
+  document.getElementById('retrySyncWrap').classList.add('hidden');
   loadChoiceMenu();
   setStep(1);
 }
