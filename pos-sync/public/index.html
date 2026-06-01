@@ -1038,10 +1038,23 @@ async function callGeminiMatch(choiceDishes, posDishes, choiceCats, posCats, cho
 choiceOpts.forEach(og => {
   (og.optionList || []).forEach(item => {
     
-    // НАШ ДЕТЕКТИВ: ловимо модифікатори без імені
-    const finalName = getChoiceName(item, 'Option');
+    // НАШ ДЕТЕКТИВ: якщо у самого item немає назви, беремо назву групи + позицію/ціну, або шукаємо в og
+    let finalName = getChoiceName(item, '');
+    
+    if (!finalName) {
+      // Пробуємо взяти назву групи модифікаторів (наприклад, "Виберіть соус")
+      const groupName = getChoiceName(og, '');
+      if (groupName) {
+        // Робимо унікальну назву: "НазваГрупи + ціна" або позиція, щоб Dice Coefficient міг зачепитися
+        finalName = `${groupName} ${item.price ? item.price / 100 : item.position}`;
+      } else {
+        finalName = 'Option';
+      }
+    }
+
     if (finalName === 'Option') {
-      console.log("ПРОБЛЕМНИЙ МОДИФІКАТОР CHOICE:", item);
+      // Якщо взагалі глухо, виведемо групу подивитися, що в ній є
+      console.log("ПРОБЛЕМНА ГРУПА МОДИФІКАТОРІВ og:", og);
     }
 
     choiceOptItems.push({
