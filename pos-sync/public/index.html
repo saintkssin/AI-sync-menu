@@ -976,15 +976,19 @@ async function callGeminiMatch(choiceDishes, posDishes, choiceCats, posCats, cho
   // Функція для витягування назви з об'єктів Choice
   console.log("РЕАЛЬНА СТРУКТУРА СТРАВИ CHOICE:", choiceDishes[0]);
   const getChoiceName = (item, defaultFallback) => {
-    if (item.name && item.name.trim()) return item.name.trim();
-    if (item.nameLocalizations) {
-      const loc = item.nameLocalizations;
-      if (loc.uk && loc.uk.trim()) return loc.uk.trim();
-      if (loc.en && loc.en.trim()) return loc.en.trim();
-      if (loc.ru && loc.ru.trim()) return loc.ru.trim();
-      // Якщо є хоч якась мова, беремо її
-      const firstKey = Object.keys(loc)[0];
-      if (firstKey && loc[firstKey] && loc[firstKey].trim()) return loc[firstKey].trim();
+    if (!item) return defaultFallback;
+    if (item.name && String(item.name).trim()) return String(item.name).trim();
+    if (item.title && String(item.title).trim()) return String(item.title).trim();
+    
+    const loc = item.nameLocalizations || item.titleLocalizations || item.translations;
+    if (loc) {
+      if (loc.es && String(loc.es).trim()) return String(loc.es).trim();
+      if (loc.uk && String(loc.uk).trim()) return String(loc.uk).trim();
+      if (loc.en && String(loc.en).trim()) return String(loc.en).trim();
+      if (loc.ru && String(loc.ru).trim()) return String(loc.ru).trim();
+      for (const key in loc) {
+        if (loc[key] && String(loc[key]).trim()) return String(loc[key]).trim();
+      }
     }
     return defaultFallback;
   };
