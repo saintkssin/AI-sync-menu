@@ -25,7 +25,7 @@
     --sans: 'IBM Plex Sans', sans-serif;
   }
 
-  * { box-shrink: border-box; margin: 0; padding: 0; box-sizing: border-box; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
 
   body {
     background: var(--bg);
@@ -401,7 +401,7 @@
   }
   .btn-confirm.approve:hover { background: rgba(62,207,142,0.25); }
   .btn-confirm.reject {
-    background: rgba(224,92,92,0.1);
+    background: rgba(224, 92, 92, 0.1);
     color: var(--red);
     border: 1px solid rgba(224,92,92,0.25);
     margin-left: 6px;
@@ -699,7 +699,6 @@ const API_BASE = 'https://open-api.choiceqr.com';
 
 // ===================== HELPERS =====================
 function api(method, path, body) {
-  // Всі запити до Choice йдуть через наш бекенд-проксі
   return fetch('/api/choice' + path, {
     method,
     headers: {
@@ -748,7 +747,6 @@ async function connectToken() {
   document.getElementById('authSuccess').classList.add('hidden');
 
   try {
-    // Test token by fetching section info
     const r = await fetch('/api/choice/menu/' + state.language + '/sections/list', {
       headers: { 'x-choice-token': token }
     });
@@ -774,7 +772,6 @@ async function loadChoiceMenu() {
   document.getElementById('choiceMenuInfo').textContent = 'Завантаження меню Choice...';
 
   try {
-    // 1. Get sections
     const secR = await fetch('/api/choice/menu/' + state.language + '/sections/list', {
       headers: { 'x-choice-token': state.token }
     });
@@ -787,27 +784,23 @@ async function loadChoiceMenu() {
     let allCategories = [], allDishes = [], allOptions = [];
 
     for (const sec of sections) {
-      // Categories
       const catR = await fetch('/api/choice/menu/' + state.language + '/categories/list/' + sec._id, {
         headers: { 'x-choice-token': state.token }
       });
       const cats = await catR.json();
       if (Array.isArray(cats)) {
         allCategories.push(...cats);
-        // Dishes per category
         for (const cat of cats) {
           const dishR = await fetch('/api/choice/menu/' + state.language + '/dishes/list/' + cat._id, {
             headers: { 'x-choice-token': state.token }
           });
           const dishes = await dishR.json();
           if (Array.isArray(dishes)) {
-            // Зберігаємо categoryId для групування в "не знайдено"
             dishes.forEach(d => { d.category = d.category || cat._id; });
             allDishes.push(...dishes);
           }
         }
       }
-      // Options — спочатку отримуємо список, потім для кожної тягнемо повний об'єкт з optionList
       const optR = await fetch('/api/choice/menu/' + state.language + '/options/list/' + sec._id, {
         headers: { 'x-choice-token': state.token }
       });
@@ -843,7 +836,6 @@ function handleFile(file) {
     const rows = XLSX.utils.sheet_to_json(ws, { header: 1 });
 
     const headers = rows[0];
-    // ОНОВЛЕННЯ: Гнучкий та універсальний пошук колонок
     const posIdCol    = headers.findIndex(h => /pos id|id/i.test(String(h).trim()));
     const nameCol     = headers.findIndex(h => /dish name|назва|название|name/i.test(String(h).trim()));
     const catCol      = headers.findIndex(h => /category|категорія|категория/i.test(String(h).trim()));
@@ -854,8 +846,8 @@ function handleFile(file) {
     console.log('Cols:', {posIdCol, nameCol, catCol, priceCol, catPosIdCol});
 
     const dishes = [];
-    const simpleModifiers = {};  // itemPosId → {posId, name, price}
-    const multiModifiers  = {};  // groupChoicePosId (M...) → [{itemPosId, name, price}]
+    const simpleModifiers = {};
+    const multiModifiers  = {};
 
     for (let i = 1; i < rows.length; i++) {
       const row = rows[i];
@@ -867,17 +859,15 @@ function handleFile(file) {
       const price    = parseFloat(row[priceCol]) || 0;
       const catPosId = String(row[catPosIdCol] || '').trim();
 
-      // Multi модифікатор — [Modificators] Назва страви
       if (cat.startsWith('[Modificators]')) {
         const [groupId, itemId] = posId.includes('**') ? posId.split('**') : [posId, posId];
         const cleanName = name.replace(/^Multi\s+/i, '').trim();
-        const groupKey = catPosId; // M2450caa9-...
+        const groupKey = catPosId;
         if (!multiModifiers[groupKey]) multiModifiers[groupKey] = [];
         multiModifiers[groupKey].push({ itemPosId: itemId, groupPosId: groupId, name: cleanName, price });
         continue;
       }
 
-      // Простий модифікатор — Category = "Modificators"
       if (cat === 'Modificators') {
         const [groupId, itemId] = posId.includes('**') ? posId.split('**') : [posId, posId];
         if (!simpleModifiers[itemId]) {
@@ -886,19 +876,15 @@ function handleFile(file) {
         continue;
       }
 
-      // Звичайна страва
       dishes.push({ posId, name, category: cat, price, categoryPosId: catPosId });
     }
 
-    // Унікальні категорії
     const catMap = {};
     dishes.forEach(d => { catMap[d.categoryPosId] = d.category; });
     const categories = Object.entries(catMap).map(([id, name]) => ({ posId: id, name }));
 
-    // Список унікальних modItems для матчингу
     const modItemsList = Object.values(simpleModifiers);
 
-    // Групи модифікаторів для застосування (з Multi)
     const modGroups = Object.entries(multiModifiers).map(([groupChoicePosId, items]) => ({
       groupChoicePosId,
       items
@@ -923,7 +909,6 @@ function handleFile(file) {
   reader.readAsArrayBuffer(file);
 }
 
-// Drag & drop
 const fileDrop = document.getElementById('fileDrop');
 fileDrop.addEventListener('dragover', e => { e.preventDefault(); fileDrop.classList.add('dragover'); });
 fileDrop.addEventListener('dragleave', () => fileDrop.classList.remove('dragover'));
@@ -947,7 +932,7 @@ async function goToSync() {
 async function runSync() {
   const log = document.getElementById('syncLog');
   log.innerHTML = '';
-  document.getElementById('retrySyncWrap').classList.add('hidden'); // Ховаємо кнопку ретраю при новому запуску
+  document.getElementById('retrySyncWrap').classList.add('hidden'); // Ховаємо кнопку ретраю
 
   addSyncLog('Підготовка даних...');
   setSyncProgress(5, 'Підготовка даних...');
@@ -977,7 +962,7 @@ async function runSync() {
   } catch(e) {
     addSyncLog('Помилка AI: ' + e.message, 'err');
     setSyncProgress(0, 'Помилка');
-    document.getElementById('retrySyncWrap').classList.remove('hidden'); // ОНОВЛЕННЯ: Показуємо кнопку ретраю при помилці
+    document.getElementById('retrySyncWrap').classList.remove('hidden'); // ГАРАНТОВАНО показуємо кнопку тут
   }
 }
 
@@ -1018,58 +1003,14 @@ async function callGeminiMatch(choiceDishes, posDishes, choiceCats, posCats, cho
     })
   });
 
+  // ЗАХИСТ: якщо сервер повернув помилку (наприклад, 503), не намагаємося читати як JSON, а відразу викидаємо помилку для блоку catch!
   if (!resp.ok) {
-    const err = await resp.json().catch(() => ({}));
-    throw new Error(err.error || 'Server error: ' + resp.status);
+    const textErr = await resp.text().catch(() => 'Unknown server error');
+    throw new Error(textErr || 'HTTP ' + resp.status);
   }
+  
   const parsed = await resp.json();
-
-  const matched = [], review = [];
-  const matchedDishIds = new Set();
-  (parsed.dishes || []).forEach(m => {
-    matchedDishIds.add(m.choiceId);
-    const item = { type: 'dish', choiceId: m.choiceId, posId: m.posId, choiceName: m.choiceName, posName: m.posName, price: m.price, confidence: m.confidence };
-    if (m.confidence === 'high') matched.push(item);
-    else review.push({ ...item, approved: null });
-  });
-
-  const matchedCatIds = new Set();
-  (parsed.categories || []).forEach(m => {
-    matchedCatIds.add(m.choiceId);
-    const item = { type: 'category', choiceId: m.choiceId, posId: m.posId, choiceName: m.choiceName, posName: m.posName, confidence: m.confidence };
-    if (m.confidence === 'high') matched.push(item);
-    else review.push({ ...item, approved: null });
-  });
-
-  const matchedOptIds = new Set();
-  (parsed.optionItems || []).forEach(m => {
-    matchedOptIds.add(m.choiceItemId);
-    const item = { type: 'option', choiceGroupId: m.choiceGroupId, choiceId: m.choiceItemId, posId: m.posItemId, choiceName: m.choiceName, posName: m.posName, price: m.price, confidence: m.confidence };
-    if (m.confidence === 'high') matched.push(item);
-    else review.push({ ...item, approved: null });
-  });
-
-  const unmatched = [];
-  choiceDishes.forEach(d => {
-    if (!matchedDishIds.has(d._id)) {
-      const posWithPrice = posDishes.filter(p => p.price === Math.round(d.price / 100));
-      unmatched.push({ type: 'dish', choiceId: d._id, choiceName: d.name, price: Math.round(d.price / 100), reason: posWithPrice.length === 0 ? 'Ціна не знайдена в POS' : 'Назва не співпадає' });
-    }
-  });
-  choiceCats.forEach(c => {
-    if (!matchedCatIds.has(c._id)) {
-      unmatched.push({ type: 'category', choiceId: c._id, choiceName: c.name, reason: 'Не знайдено відповідність' });
-    }
-  });
-  choiceOpts.forEach(og => {
-    (og.optionList || []).forEach(item => {
-      if (!matchedOptIds.has(item._id)) {
-        unmatched.push({ type: 'option', choiceId: item._id, choiceName: item.name, price: Math.round(item.price / 100), reason: 'Не знайдено відповідність' });
-      }
-    });
-  });
-
-  return { matched, review, unmatched };
+  return parsed;
 }
 
 // ===================== RENDER RESULTS =====================
