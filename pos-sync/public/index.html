@@ -796,7 +796,7 @@ async function loadChoiceMenu() {
           });
           const dishes = await dishR.json();
           if (Array.isArray(dishes)) {
-            dishes.forEach(d => { d.category = d.category || cat._id; });
+            dishes.forEach(d => { d.category = d.category || cat._id; d.categoryName = cat.name; });
             allDishes.push(...dishes);
           }
         }
@@ -901,8 +901,8 @@ function handleFile(file) {
     document.getElementById('posStats').classList.remove('hidden');
     document.getElementById('posStatsRow').innerHTML = `
       <div class="stat-card"><div class="stat-value">${categories.length}</div><div class="stat-label">Категорій</div></div>
-      <div class="stat-card"><div class="stat-value">${dishes.length}</div><div class="stat-label">Страв</div></div>
-      <div class="stat-card"><div class="stat-value">${modGroups.length}</div><div class="stat-label">Груп опцій</div></div>
+      <div class="stat-card"><div class="stat-value">${dishes.length}</div><div class="stat-label">Striav</div></div>
+      <div class="stat-card"><div class="stat-value">${modGroups.length}</div><div class="stat-label">Grup</div></div>
       <div class="stat-card"><div class="stat-value">${modItemsList.length}</div><div class="stat-label">Опцій</div></div>
     `;
   };
@@ -932,7 +932,7 @@ async function goToSync() {
 async function runSync() {
   const log = document.getElementById('syncLog');
   log.innerHTML = '';
-  document.getElementById('retrySyncWrap').classList.add('hidden'); // Ховаємо кнопку ретраю
+  document.getElementById('retrySyncWrap').classList.add('hidden');
 
   addSyncLog('Підготовка даних...');
   setSyncProgress(5, 'Підготовка даних...');
@@ -962,7 +962,7 @@ async function runSync() {
   } catch(e) {
     addSyncLog('Помилка AI: ' + e.message, 'err');
     setSyncProgress(0, 'Помилка');
-    document.getElementById('retrySyncWrap').classList.remove('hidden'); // ГАРАНТОВАНО показуємо кнопку тут
+    document.getElementById('retrySyncWrap').classList.remove('hidden');
   }
 }
 
@@ -1003,21 +1003,67 @@ async function callGeminiMatch(choiceDishes, posDishes, choiceCats, posCats, cho
     })
   });
 
-  // ЗАХИСТ: якщо сервер повернув помилку (наприклад, 503), не намагаємося читати як JSON, а відразу викидаємо помилку для блоку catch!
   if (!resp.ok) {
     const textErr = await resp.text().catch(() => 'Unknown server error');
     throw new Error(textErr || 'HTTP ' + resp.status);
   }
   
-  const parsed = await resp.json();
+  const parsed = await resp.json() || { dishes: [], categories: [], optionItems: [] };
+  
+  parsed.dishes = parsed.dishes || [];
+  parsed.categories = parsed.categories || [];
+  parsed.optionItems = parsed.optionItems || [];
 
-// ПІДСТРАХОВКА: якщо якихось масивів немає, робимо їх порожніми, щоб не падала length
-if (!parsed) return { dishes: [], categories: [], optionItems: [] };
-parsed.dishes = parsed.dishes || [];
-parsed.categories = parsed.categories || [];
-parsed.optionItems = parsed.optionItems || [];
+  const matched = [], review = [];
+  const matchedDishIds = new Set();
+  const matchedCatIds = new Set();
+  const matchedOptIds = new Set();
 
-return parsed;
+  parsed.dishes.forEach(m => {
+    if (!m) return;
+    matchedDishIds.add(m.choiceId);
+    const item = { type: 'dish', choiceId: m.choiceId, posId: m.posId, choiceName: m.choiceName, posName: m.posName, price: m.price, confidence: m.confidence };
+    if (m.confidence === 'high') matched.push(item);
+    else review.push({ ...item, approved: null });
+  });
+
+  parsed.categories.forEach(m => {
+    if (!m) return;
+    matchedCatIds.add(m.choiceId);
+    const item = { type: 'category', choiceId: m.choiceId, posId: m.posId, choiceName: m.choiceName, posName: m.posName, confidence: m.confidence };
+    if (m.confidence === 'high') matched.push(item);
+    else review.push({ ...item, approved: null });
+  });
+
+  parsed.optionItems.forEach(m => {
+    if (!m) return;
+    matchedOptIds.add(m.choiceItemId || m.choiceId);
+    const item = { type: 'option', choiceGroupId: m.choiceGroupId, choiceId: m.choiceItemId || m.choiceId, posId: m.posItemId || m.posId, choiceName: m.choiceName, posName: m.posName, price: m.price, confidence: m.confidence };
+    if (m.confidence === 'high') matched.push(item);
+    else review.push({ ...item, approved: null });
+  });
+
+  const unmatched = [];
+  choiceDishes.forEach(d => {
+    if (!matchedDishIds.has(d._id)) {
+      const posWithPrice = posDishes.filter(p => p.price === Math.round(d.price / 100));
+      unmatched.push({ type: 'dish', categoryId: d.category, categoryName: d.categoryName || 'Без категорії', choiceId: d._id, choiceName: d.name, price: Math.round(d.price / 100), reason: posWithPrice.length === 0 ? 'Ціна не знайдена в POS' : 'Назва не співпадає' });
+    }
+  });
+  choiceCats.forEach(c => {
+    if (!matchedCatIds.has(c._id)) {
+      unmatched.push({ type: 'category', choiceId: c._id, choiceName: c.name, reason: 'Не знайдено відповідність' });
+    }
+  });
+  choiceOpts.forEach(og => {
+    (og.optionList || []).forEach(item => {
+      if (!matchedOptIds.has(item._id)) {
+        unmatched.push({ type: 'option', choiceId: item._id, choiceName: item.name, price: Math.round(item.price / 100), reason: 'Не знайдено відповідність' });
+      }
+    });
+  });
+
+  return { matched, review, unmatched };
 }
 
 // ===================== RENDER RESULTS =====================
@@ -1032,6 +1078,7 @@ function renderResults() {
   if (matched.length === 0) {
     document.getElementById('matchedEmpty').classList.remove('hidden');
   } else {
+    document.getElementById('matchedEmpty').classList.add('hidden');
     matched.forEach(m => {
       mb.innerHTML += `<tr>
         <td>${typeBadge(m.type)}</td>
@@ -1049,6 +1096,7 @@ function renderResults() {
   if (review.length === 0) {
     document.getElementById('reviewEmpty').classList.remove('hidden');
   } else {
+    document.getElementById('reviewEmpty').classList.add('hidden');
     review.forEach((m, i) => {
       rb.innerHTML += `<tr id="reviewRow${i}">
         <td>${typeBadge(m.type)}</td>
@@ -1069,11 +1117,13 @@ function renderResults() {
   if (unmatched.length === 0) {
     document.getElementById('unmatchedEmpty').classList.remove('hidden');
   } else {
+    document.getElementById('unmatchedEmpty').classList.add('hidden');
+    
     const unmatchedCats = unmatched.filter(u => u.type === 'category');
     if (unmatchedCats.length > 0) {
       ub.innerHTML += `<div class="section-title">Категорії без відповідності (${unmatchedCats.length})</div>`;
       unmatchedCats.forEach(u => {
-        ub.innerHTML += `<div class="unmatched-item">
+        ub.innerHTML += `<div class="unmatched-item" style="padding: 10px 12px;">
           <div class="unmatched-name">${esc(u.choiceName)}</div>
           <div class="unmatched-reason">${esc(u.reason)}</div>
         </div>`;
@@ -1097,7 +1147,7 @@ function renderResults() {
             <span style="font-size:10px;color:var(--text3);margin-left:8px">${group.items.length} позицій</span>
           </div>`;
         group.items.forEach(u => {
-          ub.innerHTML += `<div class="unmatched-item" style="padding-left:20px">
+          ub.innerHTML += `<div class="unmatched-item" style="padding: 10px 12px 10px 20px;">
             <div>
               <div class="unmatched-name">${esc(u.choiceName)}${u.price ? `<span style="color:var(--text3);font-size:11px;margin-left:6px">${u.price} грн</span>` : ''}</div>
             </div>
@@ -1111,7 +1161,7 @@ function renderResults() {
     if (unmatchedOpts.length > 0) {
       ub.innerHTML += `<div class="section-title" style="margin-top:8px">Опції без відповідності (${unmatchedOpts.length})</div>`;
       unmatchedOpts.forEach(u => {
-        ub.innerHTML += `<div class="unmatched-item">
+        ub.innerHTML += `<div class="unmatched-item" style="padding: 10px 12px;">
           <div class="unmatched-name">${esc(u.choiceName)}${u.price ? `<span style="color:var(--text3);font-size:11px;margin-left:6px">${u.price} грн</span>` : ''}</div>
           <div class="unmatched-reason">${esc(u.reason)}</div>
         </div>`;
