@@ -1010,7 +1010,14 @@ async function callGeminiMatch(choiceDishes, posDishes, choiceCats, posCats, cho
   }
   
   const parsed = await resp.json();
-  return parsed;
+
+// ПІДСТРАХОВКА: якщо якихось масивів немає, робимо їх порожніми, щоб не падала length
+if (!parsed) return { dishes: [], categories: [], optionItems: [] };
+parsed.dishes = parsed.dishes || [];
+parsed.categories = parsed.categories || [];
+parsed.optionItems = parsed.optionItems || [];
+
+return parsed;
 }
 
 // ===================== RENDER RESULTS =====================
