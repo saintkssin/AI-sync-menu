@@ -11,8 +11,9 @@ app.use(express.static(path.join(__dirname, '../public')));
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const CHOICE_CLIENT_ID = process.env.CHOICE_CLIENT_ID;
 const CHOICE_CLIENT_SECRET = process.env.CHOICE_CLIENT_SECRET;
-// Повертаємо більш розумну модель
-const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${GEMINI_API_KEY}`;
+
+// Повертаємо 2.5-lite, яка успішно підключалася раніше!
+const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${GEMINI_API_KEY}`;
 
 // ─── Health check ────────────────────────────────────────────────
 app.get('/health', (req, res) => res.json({ ok: true }));
