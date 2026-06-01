@@ -12,7 +12,7 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const CHOICE_CLIENT_ID = process.env.CHOICE_CLIENT_ID;
 const CHOICE_CLIENT_SECRET = process.env.CHOICE_CLIENT_SECRET;
 
-// Використовуємо стабільну модель gemini-2.5-flash
+// Використовуємо комерційну стабільну модель на шлюзі v1 (для Pay-as-you-go)
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
 
 // ─── Health check ────────────────────────────────────────────────
@@ -266,59 +266,7 @@ async function callGemini(prompt, isRetry = false) {
     contents: [{ parts: [{ text: prompt }] }],
     generationConfig: { 
       temperature: 0.1, 
-      maxOutputTokens: 8192,
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: "OBJECT",
-        properties: {
-          dishes: {
-            type: "ARRAY",
-            items: {
-              type: "OBJECT",
-              properties: {
-                choiceId: { type: "STRING" },
-                posId: { type: "STRING" },
-                choiceName: { type: "STRING" },
-                posName: { type: "STRING" },
-                price: { type: "NUMBER" },
-                confidence: { type: "STRING" }
-              },
-              required: ["choiceId", "posId", "choiceName", "posName", "confidence"]
-            }
-          },
-          categories: {
-            type: "ARRAY",
-            items: {
-              type: "OBJECT",
-              properties: {
-                choiceId: { type: "STRING" },
-                posId: { type: "STRING" },
-                choiceName: { type: "STRING" },
-                posName: { type: "STRING" },
-                confidence: { type: "STRING" }
-              },
-              required: ["choiceId", "posId", "choiceName", "posName", "confidence"]
-            }
-          },
-          optionItems: {
-            type: "ARRAY",
-            items: {
-              type: "OBJECT",
-              properties: {
-                choiceGroupId: { type: "STRING" },
-                choiceItemId: { type: "STRING" },
-                posItemId: { type: "STRING" },
-                choiceName: { type: "STRING" },
-                posName: { type: "STRING" },
-                price: { type: "NUMBER" },
-                confidence: { type: "STRING" }
-              },
-              required: ["choiceGroupId", "choiceItemId", "posItemId", "choiceName", "posName", "confidence"]
-            }
-          }
-        },
-        required: ["dishes", "categories", "optionItems"]
-      }
+      maxOutputTokens: 8192
     }
   };
 
