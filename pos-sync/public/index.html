@@ -977,26 +977,42 @@ async function callGeminiMatch(choiceDishes, posDishes, choiceCats, posCats, cho
   console.log("РЕАЛЬНА СТРУКТУРА СТРАВИ CHOICE:", choiceDishes[0]);
   const getChoiceName = (item, defaultFallback) => {
     if (!item) return defaultFallback;
-    
-    // 1. Перевіряємо hurl (це наш рятівник для Moltacarn)
-    if (item.hurl && String(item.hurl).trim()) {
-      return String(item.hurl).trim();
-    }
-    
-    // 2. Якщо раптом є звичайне ім'я
-    if (item.name && String(item.name).trim()) return String(item.name).trim();
-    if (item.title && String(item.title).trim()) return String(item.title).trim();
-    
-    // 3. Локалізації на всякий випадок
+
+    // Помічник для безпечного витягування рядка з будь-чого
+    const getString = (val) => {
+      if (!val) return '';
+      if (typeof val === 'string') return val.trim();
+      if (typeof val === 'object') {
+        // Якщо це об'єкт типу {es: 'Moltacarn', uk: '...'}
+        const target = val.es || val.uk || val.en || val.ru;
+        if (target && typeof target === 'string') return target.trim();
+        // Якщо мовних ключів немає, беремо перше ліпше значення
+        for (const key in val) {
+          if (val[key] && typeof val[key] === 'string') return val[key].trim();
+        }
+      }
+      return String(val).trim();
+    };
+
+    // 1. Пробуємо дістати нормальне ім'я з name або title
+    const nameStr = getString(item.name);
+    if (nameStr) return nameStr;
+
+    const titleStr = getString(item.title);
+    if (titleStr) return titleStr;
+
+    // 2. Пробуємо дістати з вкладених локалізацій (про всяк випадок)
     const loc = item.nameLocalizations || item.titleLocalizations || item.translations;
     if (loc) {
-      if (loc.es && String(loc.es).trim()) return String(loc.es).trim();
-      if (loc.uk && String(loc.uk).trim()) return String(loc.uk).trim();
-      if (loc.en && String(loc.en).trim()) return String(loc.en).trim();
-      for (const key in loc) {
-        if (loc[key] && String(loc[key]).trim()) return String(loc[key]).trim();
-      }
+      const locStr = getString(loc);
+      if (locStr) return locStr;
     }
+
+    // 3. Якщо нормальних імен взагалі немає (як у страв латиницею), беремо hurl
+    if (item.hurl && typeof item.hurl === 'string' && item.hurl.trim()) {
+      return item.hurl.trim();
+    }
+
     return defaultFallback;
   };
 
