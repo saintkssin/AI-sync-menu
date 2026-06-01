@@ -12,8 +12,8 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const CHOICE_CLIENT_ID = process.env.CHOICE_CLIENT_ID;
 const CHOICE_CLIENT_SECRET = process.env.CHOICE_CLIENT_SECRET;
 
-// Повертаємо 2.5-lite, яка успішно підключалася раніше!
-const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${GEMINI_API_KEY}`;
+// Використовуємо стабільну модель gemini-2.5-flash
+const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
 
 // ─── Health check ────────────────────────────────────────────────
 app.get('/health', (req, res) => res.json({ ok: true }));
@@ -127,7 +127,7 @@ app.post('/api/match', async (req, res) => {
       ...(aiResult.optionItems || [])
     ];
 
-    // Дедуп по choiceId (якщо AI задублював щось що вже є в local)
+    // Дедуп по choiceId
     const dedup = (arr, key = 'choiceId') => {
       const seen = new Set();
       return arr.filter(x => {
@@ -150,13 +150,12 @@ app.post('/api/match', async (req, res) => {
   }
 });
 
-// ─── ЕТАП 1: локальний матч ───────────────────────────────────────
+// ─── Вспомогательные функции этапа 1 (Локальный матч) ─────────────────
 
 function normalize(str) {
   return String(str || '')
     .toLowerCase()
     .trim()
-    // прибираємо подвійні пробіли, дефіси/лапки/крапки
     .replace(/[-_"'«»]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -171,7 +170,7 @@ function localExactMatch(choiceItems, posItems, isCat = false) {
 
   for (const ci of choiceItems) {
     const cName = normalize(ci.name);
-    const cPrice = ci.price; // вже в грн
+    const cPrice = ci.price;
 
     let bestMatch = null;
 
@@ -182,20 +181,17 @@ function localExactMatch(choiceItems, posItems, isCat = false) {
       const nameMatch = cName === pName;
 
       if (isCat) {
-        // Для категорій — тільки назва
         if (nameMatch) {
           bestMatch = pi;
           break;
         }
       } else {
-        // Для страв — назва + ціна
-        const priceMatch = Math.abs((pi.price || 0) - (cPrice || 0)) <= 1; // ±1 грн допуск
+        const priceMatch = Math.abs((pi.price || 0) - (cPrice || 0)) <= 1;
 
         if (nameMatch && priceMatch) {
           bestMatch = pi;
           break;
         }
-        // Якщо назва збіглась але ціна ні — запам'ятовуємо як "слабкий" варіант
         if (nameMatch && !bestMatch) {
           bestMatch = { ...pi, _nameonlymatch: true };
         }
@@ -212,10 +208,9 @@ function localExactMatch(choiceItems, posItems, isCat = false) {
         price: cPrice
       });
     } else {
-      // Якщо знайшли тільки по назві (без ціни) — кидаємо в AI з підказкою
       localUnmatched.push({
         ...ci,
-        _nameHint: bestMatch ? bestMatch.posId : null // підказка AI
+        _nameHint: bestMatch ? bestMatch.posId : null
       });
     }
   }
@@ -287,7 +282,8 @@ async function callGemini(prompt, isRetry = false) {
                 posName: { type: "STRING" },
                 price: { type: "NUMBER" },
                 confidence: { type: "STRING" }
-              }
+              },
+              required: ["choiceId", "posId", "choiceName", "posName", "confidence"]
             }
           },
           categories: {
@@ -300,7 +296,8 @@ async function callGemini(prompt, isRetry = false) {
                 choiceName: { type: "STRING" },
                 posName: { type: "STRING" },
                 confidence: { type: "STRING" }
-              }
+              },
+              required: ["choiceId", "posId", "choiceName", "posName", "confidence"]
             }
           },
           optionItems: {
@@ -315,10 +312,12 @@ async function callGemini(prompt, isRetry = false) {
                 posName: { type: "STRING" },
                 price: { type: "NUMBER" },
                 confidence: { type: "STRING" }
-              }
+              },
+              required: ["choiceGroupId", "choiceItemId", "posItemId", "choiceName", "posName", "confidence"]
             }
           }
-        }
+        },
+        required: ["dishes", "categories", "optionItems"]
       }
     }
   };
@@ -329,22 +328,39 @@ async function callGemini(prompt, isRetry = false) {
     body: JSON.stringify(body)
   });
 
-  if (!resp.ok) throw new Error(`Gemini HTTP ${resp.status}: ${await resp.text()}`);
+  if (!resp.ok) {
+    const errText = await resp.text();
+    throw new Error(`Gemini HTTP ${resp.status}: ${errText}`);
+  }
 
   const data = await resp.json();
   const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
 
   try {
-    return JSON.parse(text);
+    let clean = text.replace(/```json/gi, '').replace(/```/g, '').trim();
+    const startIdx = clean.indexOf('{');
+    const endIdx = clean.lastIndexOf('}');
+    
+    if (startIdx !== -1 && endIdx !== -1) {
+      clean = clean.substring(startIdx, endIdx + 1);
+    }
+    
+    return JSON.parse(clean);
   } catch (e) {
-    if (isRetry) throw new Error('Gemini returned invalid JSON after retry');
-    return callGemini(prompt, true);
+    console.error("=============== ПОМИЛКА ПАРСИНГУ JSON ===============");
+    console.error("Сира відповідь моделі:", text);
+    console.error("=====================================================");
+    
+    if (isRetry) {
+      return { dishes: [], categories: [], optionItems: [] };
+    }
+    
+    return callGemini(prompt + '\n\nУВАГА: Поверни тільки валідний JSON-код без зайвих слів чи маркдаун кавичок!', true);
   }
 }
 
 // ─── Prompt builder (тільки для немачених) ────────────────────────
 function buildPrompt(unmatchedDishes, posDishes, unmatchedCats, posCategories, unmatchedMods, posModifierItems) {
-  // ОЧИЩЕННЯ ДАНИХ: прибираємо картинки, переклади та інше сміття, щоб ІІ не губився
   const cleanChoiceDishes = unmatchedDishes.map(d => ({ choiceId: d.id || d._id, name: d.name, price: d.price, hintPosId: d._nameHint })).slice(0, 300);
   const cleanPosDishes = posDishes.map(d => ({ posId: d.posId, name: d.name, price: d.price })).slice(0, 500);
 
@@ -354,7 +370,7 @@ function buildPrompt(unmatchedDishes, posDishes, unmatchedCats, posCategories, u
   const cleanChoiceMods = (unmatchedMods || []).map(m => ({ choiceGroupId: m.groupId || m.choiceGroupId, choiceItemId: m.itemId || m.choiceItemId, name: m.name, price: m.price })).slice(0, 200);
   const cleanPosMods = (posModifierItems || []).map(m => ({ posId: m.posId, name: m.name, price: m.price })).slice(0, 400);
 
-  return `Ти — асистент для матчингу меню між двома системами.
+  return `Ти — асистент для матчингу menu між двома системами.
 
 ЗАВДАННЯ: знайди відповідності між позиціями Choice і POS.
 
