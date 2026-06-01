@@ -973,22 +973,22 @@ function setSyncProgress(pct, label) {
 
 // ===================== GEMINI MATCH =====================
 async function callGeminiMatch(choiceDishes, posDishes, choiceCats, posCats, choiceOpts, posModGroups, posMods) {
-  const choiceDishList = choiceDishes.slice(0, 500).map(d => ({
-    id: d._id, name: d.name, price: Math.round(d.price / 100), categoryName: d.categoryName || '', posID: d.posID
+  const choiceDishList = choiceDishes.map(d => ({
+    choiceId: d._id, name: d.name, price: Math.round(d.price / 100), categoryName: d.categoryName || '', posID: d.posID
   }));
-  const posDishList = posDishes.slice(0, 500).map(d => ({
+  const posDishList = posDishes.map(d => ({
     posId: d.posId, name: d.name, price: d.price
   }));
-  const choiceCatList = choiceCats.map(c => ({ id: c._id, name: c.name, posID: c.posID }));
+  const choiceCatList = choiceCats.map(c => ({ choiceId: c._id, name: c.name, posID: c.posID }));
   const posCatList = posCats.map(c => ({ posId: c.posId, name: c.name }));
 
   const choiceOptItems = [];
   choiceOpts.forEach(og => {
     (og.optionList || []).forEach(item => {
-      choiceOptItems.push({ groupId: og._id, itemId: item._id, name: item.name, price: Math.round(item.price / 100) });
+      choiceOptItems.push({ choiceGroupId: og._id, choiceItemId: item._id, name: item.name, price: Math.round(item.price / 100) });
     });
   });
-  const posModItemList = (state.posMenu.modItemsList || []).slice(0, 300);
+  const posModItemList = (state.posMenu.modItemsList || []);
 
   const resp = await fetch('/api/match', {
     method: 'POST',
@@ -1003,63 +1003,44 @@ async function callGeminiMatch(choiceDishes, posDishes, choiceCats, posCats, cho
     })
   });
 
-  if (!resp.ok) {
-    const textErr = await resp.text().catch(() => 'Unknown server error');
-    throw new Error(textErr || 'HTTP ' + resp.status);
-  }
+  if (!resp.ok) throw new Error('HTTP ' + resp.status);
   
-  const parsed = await resp.json() || { dishes: [], categories: [], optionItems: [] };
-  
-  parsed.dishes = parsed.dishes || [];
-  parsed.categories = parsed.categories || [];
-  parsed.optionItems = parsed.optionItems || [];
-
+  const parsed = await resp.json();
   const matched = [], review = [];
   const matchedDishIds = new Set();
   const matchedCatIds = new Set();
   const matchedOptIds = new Set();
 
-  parsed.dishes.forEach(m => {
-    if (!m) return;
+  (parsed.dishes || []).forEach(m => {
     matchedDishIds.add(m.choiceId);
     const item = { type: 'dish', choiceId: m.choiceId, posId: m.posId, choiceName: m.choiceName, posName: m.posName, price: m.price, confidence: m.confidence };
-    if (m.confidence === 'high') matched.push(item);
-    else review.push({ ...item, approved: null });
+    if (m.confidence === 'high') matched.push(item); else review.push({ ...item, approved: null });
   });
 
-  parsed.categories.forEach(m => {
-    if (!m) return;
+  (parsed.categories || []).forEach(m => {
     matchedCatIds.add(m.choiceId);
     const item = { type: 'category', choiceId: m.choiceId, posId: m.posId, choiceName: m.choiceName, posName: m.posName, confidence: m.confidence };
-    if (m.confidence === 'high') matched.push(item);
-    else review.push({ ...item, approved: null });
+    if (m.confidence === 'high') matched.push(item); else review.push({ ...item, approved: null });
   });
 
-  parsed.optionItems.forEach(m => {
-    if (!m) return;
-    matchedOptIds.add(m.choiceItemId || m.choiceId);
-    const item = { type: 'option', choiceGroupId: m.choiceGroupId, choiceId: m.choiceItemId || m.choiceId, posId: m.posItemId || m.posId, choiceName: m.choiceName, posName: m.posName, price: m.price, confidence: m.confidence };
-    if (m.confidence === 'high') matched.push(item);
-    else review.push({ ...item, approved: null });
+  (parsed.optionItems || []).forEach(m => {
+    matchedOptIds.add(m.choiceItemId);
+    const item = { type: 'option', choiceGroupId: m.choiceGroupId, choiceId: m.choiceItemId, posId: m.posItemId, choiceName: m.choiceName, posName: m.posName, price: m.price, confidence: m.confidence };
+    if (m.confidence === 'high') matched.push(item); else review.push({ ...item, approved: null });
   });
 
   const unmatched = [];
   choiceDishes.forEach(d => {
     if (!matchedDishIds.has(d._id)) {
-      const posWithPrice = posDishes.filter(p => p.price === Math.round(d.price / 100));
-      unmatched.push({ type: 'dish', categoryId: d.category, categoryName: d.categoryName || 'Без категорії', choiceId: d._id, choiceName: d.name, price: Math.round(d.price / 100), reason: posWithPrice.length === 0 ? 'Ціна не знайдена в POS' : 'Назва не співпадає' });
+      unmatched.push({ type: 'dish', categoryId: d.category, categoryName: d.categoryName || 'Без категорії', choiceId: d._id, choiceName: d.name, price: Math.round(d.price / 100), reason: 'Не знайдено відповідність' });
     }
   });
   choiceCats.forEach(c => {
-    if (!matchedCatIds.has(c._id)) {
-      unmatched.push({ type: 'category', choiceId: c._id, choiceName: c.name, reason: 'Не знайдено відповідність' });
-    }
+    if (!matchedCatIds.has(c._id)) unmatched.push({ type: 'category', choiceId: c._id, choiceName: c.name, reason: 'Не знайдено відповідність' });
   });
   choiceOpts.forEach(og => {
     (og.optionList || []).forEach(item => {
-      if (!matchedOptIds.has(item._id)) {
-        unmatched.push({ type: 'option', choiceId: item._id, choiceName: item.name, price: Math.round(item.price / 100), reason: 'Не знайдено відповідність' });
-      }
+      if (!matchedOptIds.has(item._id)) unmatched.push({ type: 'option', choiceId: item._id, choiceName: item.name, price: Math.round(item.price / 100), reason: 'Не знайдено відповідність' });
     });
   });
 
