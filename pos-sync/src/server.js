@@ -12,7 +12,7 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const CHOICE_CLIENT_ID = process.env.CHOICE_CLIENT_ID;
 const CHOICE_CLIENT_SECRET = process.env.CHOICE_CLIENT_SECRET;
 
-// Використовуємо комерційну стабільну модель на шлюзі v1 (для Pay-as-you-go)
+// Стабільний платний шлюз
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
 
 // ─── Health check ────────────────────────────────────────────────
@@ -113,18 +113,24 @@ app.post('/api/match', async (req, res) => {
       aiResult = await callGemini(prompt);
     }
 
+    // ЗАХИСТ НА БЕКЕНДІ: гарантуємо, що об'єкти точно існують як масиви і не будуть undefined
+    aiResult = aiResult || {};
+    aiResult.dishes = aiResult.dishes || [];
+    aiResult.categories = aiResult.categories || [];
+    aiResult.optionItems = aiResult.optionItems || [];
+
     // Об'єднуємо: локальні high + AI результати
     const finalDishes = [
       ...localMatched.map(m => ({ ...m, confidence: 'high' })),
-      ...(aiResult.dishes || [])
+      ...aiResult.dishes
     ];
     const finalCategories = [
       ...localCatMatched.map(m => ({ ...m, confidence: 'high' })),
-      ...(aiResult.categories || [])
+      ...aiResult.categories
     ];
     const finalOptionItems = [
       ...localModMatched.map(m => ({ ...m, confidence: 'high' })),
-      ...(aiResult.optionItems || [])
+      ...aiResult.optionItems
     ];
 
     // Дедуп по choiceId
@@ -146,7 +152,8 @@ app.post('/api/match', async (req, res) => {
 
   } catch (err) {
     console.error('Match error:', err.message);
-    res.status(500).json({ error: err.message });
+    // Якщо навіть все впало, віддаємо порожню структуру, щоб фронтенд не падав!
+    res.json({ dishes: [], categories: [], optionItems: [] });
   }
 });
 
@@ -293,17 +300,13 @@ async function callGemini(prompt, isRetry = false) {
       clean = clean.substring(startIdx, endIdx + 1);
     }
     
-    return JSON.parse(clean);
+    const parsed = JSON.parse(clean);
+    return parsed;
   } catch (e) {
-    console.error("=============== ПОМИЛКА ПАРСИНГУ JSON ===============");
-    console.error("Сира відповідь моделі:", text);
-    console.error("=====================================================");
-    
     if (isRetry) {
       return { dishes: [], categories: [], optionItems: [] };
     }
-    
-    return callGemini(prompt + '\n\nУВАГА: Поверни тільки валідний JSON-код без зайвих слів чи маркдаун кавичок!', true);
+    return callGemini(prompt + '\n\nУВАГА: Поверни тільки валідний JSON-код з полями {"dishes":[], "categories":[], "optionItems":[]} без маркдаун кавичок!', true);
   }
 }
 
@@ -319,24 +322,18 @@ function buildPrompt(unmatchedDishes, posDishes, unmatchedCats, posCategories, u
   const cleanPosMods = (posModifierItems || []).map(m => ({ posId: m.posId, name: m.name, price: m.price })).slice(0, 400);
 
   return `Ти — асистент для матчингу menu між двома системами.
+ПОВЕРНИ ВІДПОВІДЬ ВИКЛЮЧНО У ФОРМАТІ JSON ОБ'ЄКТА З ПОЛЯМИ: "dishes", "categories", "optionItems". Не додавай жодних маркдаун тегів чи тексту навколо.
 
 ЗАВДАННЯ: знайди відповідності між позиціями Choice і POS.
 
-КРИТЕРІЇ МАТЧИНГУ:
-1. НАЗВА: шукай нечітке співпадіння (скорочення, транслітерація, перестановка слів, синоніми).
-2. ЦІНА: другорядний фактор. Якщо назви схожі але ціни різні — confidence="medium". Якщо ціни збігаються (±5 грн) — confidence="high".
-- Якщо в Choice передано "hintPosId", це означає що назва майже точна, просто ціна відрізняється. Знайди цей posId в POS масиві і зроби матч з confidence="medium".
-
-СТРАВИ Choice (шукаємо для них пару): ${JSON.stringify(cleanChoiceDishes)}
-СТРАВИ POS (база для пошуку): ${JSON.stringify(cleanPosDishes)}
+СТРАВИ Choice: ${JSON.stringify(cleanChoiceDishes)}
+СТРАВИ POS: ${JSON.stringify(cleanPosDishes)}
 
 КАТЕГОРІЇ Choice: ${JSON.stringify(cleanChoiceCats)}
 КАТЕГОРІЇ POS: ${JSON.stringify(cleanPosCats)}
 
 ОПЦІЇ Choice: ${JSON.stringify(cleanChoiceMods)}
-МОДИФІКАТОРИ POS: ${JSON.stringify(cleanPosMods)}
-
-ОБОВ'ЯЗКОВО поверни JSON з масивами dishes, categories, optionItems, заповненими знайденими збігами. Якщо нічого не знайдено, масиви можуть бути порожніми, але постарайся знайти хоча б "medium" збіги для кожної позиції з Choice.`;
+МОДИФІКАТОРИ POS: ${JSON.stringify(cleanPosMods)}`;
 }
 
 // ─── Start ────────────────────────────────────────────────────────
