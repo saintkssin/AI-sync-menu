@@ -11,7 +11,8 @@ app.use(express.static(path.join(__dirname, '../public')));
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const CHOICE_CLIENT_ID = process.env.CHOICE_CLIENT_ID;
 const CHOICE_CLIENT_SECRET = process.env.CHOICE_CLIENT_SECRET;
-const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${GEMINI_API_KEY}`;
+// Повертаємо більш розумну модель
+const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${GEMINI_API_KEY}`;
 
 // ─── Health check ────────────────────────────────────────────────
 app.get('/health', (req, res) => res.json({ ok: true }));
@@ -271,7 +272,6 @@ async function callGemini(prompt, isRetry = false) {
       temperature: 0.1, 
       maxOutputTokens: 8192,
       responseMimeType: "application/json",
-      // Добавляем строгую схему, чтобы ИИ не смог вернуть пустой шаблон из промпта
       responseSchema: {
         type: "OBJECT",
         properties: {
@@ -343,28 +343,35 @@ async function callGemini(prompt, isRetry = false) {
 
 // ─── Prompt builder (тільки для немачених) ────────────────────────
 function buildPrompt(unmatchedDishes, posDishes, unmatchedCats, posCategories, unmatchedMods, posModifierItems) {
+  // ОЧИЩЕННЯ ДАНИХ: прибираємо картинки, переклади та інше сміття, щоб ІІ не губився
+  const cleanChoiceDishes = unmatchedDishes.map(d => ({ choiceId: d.id || d._id, name: d.name, price: d.price, hintPosId: d._nameHint })).slice(0, 300);
+  const cleanPosDishes = posDishes.map(d => ({ posId: d.posId, name: d.name, price: d.price })).slice(0, 500);
+
+  const cleanChoiceCats = unmatchedCats.map(c => ({ choiceId: c.id || c._id, name: c.name })).slice(0, 100);
+  const cleanPosCats = posCategories.map(c => ({ posId: c.posId, name: c.name })).slice(0, 200);
+
+  const cleanChoiceMods = (unmatchedMods || []).map(m => ({ choiceGroupId: m.groupId || m.choiceGroupId, choiceItemId: m.itemId || m.choiceItemId, name: m.name, price: m.price })).slice(0, 200);
+  const cleanPosMods = (posModifierItems || []).map(m => ({ posId: m.posId, name: m.name, price: m.price })).slice(0, 400);
+
   return `Ти — асистент для матчингу меню між двома системами.
 
-ЗАВДАННЯ: знайди відповідності між позиціями Choice і POS для тих позицій, які НЕ знайшлись автоматично точним збігом.
+ЗАВДАННЯ: знайди відповідності між позиціями Choice і POS.
 
-КРИТЕРІЇ МАТЧИНГУ (за пріоритетом):
-1. НАЗВА: нечітке співпадіння — скорочення, транслітерація ("Борщ" = "Borshch"), перестановка слів, відмінювання, синоніми, "NEW"/"нова" в назві. Якщо назви схожі на 70%+ — це матч.
-2. ЦІНА: другорядний фактор. Якщо назви схожі але ціни різні — впевненість "medium". Якщо ціни збігаються (±5 грн) — впевненість "high".
+КРИТЕРІЇ МАТЧИНГУ:
+1. НАЗВА: шукай нечітке співпадіння (скорочення, транслітерація, перестановка слів, синоніми).
+2. ЦІНА: другорядний фактор. Якщо назви схожі але ціни різні — confidence="medium". Якщо ціни збігаються (±5 грн) — confidence="high".
+- Якщо в Choice передано "hintPosId", це означає що назва майже точна, просто ціна відрізняється. Знайди цей posId в POS масиві і зроби матч з confidence="medium".
 
-ВАЖЛИВО:
-- Краще знайти більше матчів із впевненістю "medium", ніж пропустити очевидні збіги.
-- Якщо є _nameHint (posId підказка) — це значить назви збіглись точно, просто ціни різні. Такий матч — "medium".
-- Для модифікаторів: матч по назві та ціні, без прив'язки до страви.
-- Не матч тільки якщо назви абсолютно різні і немає жодного спільного слова.
+СТРАВИ Choice (шукаємо для них пару): ${JSON.stringify(cleanChoiceDishes)}
+СТРАВИ POS (база для пошуку): ${JSON.stringify(cleanPosDishes)}
 
-СТРАВИ Choice (не знайдено): ${JSON.stringify(unmatchedDishes.slice(0, 400))}
-СТРАВИ POS (всі): ${JSON.stringify(posDishes.slice(0, 400))}
+КАТЕГОРІЇ Choice: ${JSON.stringify(cleanChoiceCats)}
+КАТЕГОРІЇ POS: ${JSON.stringify(cleanPosCats)}
 
-КАТЕГОРІЇ Choice (не знайдено): ${JSON.stringify(unmatchedCats)}
-КАТЕГОРІЇ POS (всі): ${JSON.stringify(posCategories)}
+ОПЦІЇ Choice: ${JSON.stringify(cleanChoiceMods)}
+МОДИФІКАТОРИ POS: ${JSON.stringify(cleanPosMods)}
 
-ОПЦІЇ Choice (не знайдено): ${JSON.stringify((unmatchedMods || []).slice(0, 300))}
-МОДИФІКАТОРИ POS (всі): ${JSON.stringify((posModifierItems || []).slice(0, 300))}`;
+ОБОВ'ЯЗКОВО поверни JSON з масивами dishes, categories, optionItems, заповненими знайденими збігами. Якщо нічого не знайдено, масиви можуть бути порожніми, але постарайся знайти хоча б "medium" збіги для кожної позиції з Choice.`;
 }
 
 // ─── Start ────────────────────────────────────────────────────────
