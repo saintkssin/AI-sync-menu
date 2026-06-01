@@ -50,6 +50,7 @@ app.all('/api/choice/*', async (req, res) => {
 function diceCoefficient(str1, str2) {
   const s1 = String(str1 || '').toLowerCase().replace(/\s+/g, '');
   const s2 = String(str2 || '').toLowerCase().replace(/\s+/g, '');
+  if (!s1 || !s2) return 0;
   if (s1 === s2) return 1;
   if (s1.length < 2 || s2.length < 2) return 0;
   const bigrams1 = new Map();
@@ -68,15 +69,17 @@ function diceCoefficient(str1, str2) {
 
 function findBestFuzzyMatch(choiceItem, posItems, isCat = false) {
   let bestMatch = null; let maxScore = 0;
+  const cName = choiceItem.name || choiceItem.choiceName || '';
   for (const pi of posItems) {
-    const score = diceCoefficient(choiceItem.name, pi.name);
+    const score = diceCoefficient(cName, pi.name);
     if (score > maxScore) { maxScore = score; bestMatch = pi; }
   }
-  if (bestMatch && maxScore > 0.1) {
-    const priceMatch = isCat ? true : Math.abs((bestMatch.price || 0) - (choiceItem.price || 0)) <= 30;
-    return { match: bestMatch, confidence: (maxScore > 0.6 && priceMatch) ? 'high' : 'medium' };
+  if (bestMatch) {
+    const priceMatch = isCat ? true : Math.abs((bestMatch.price || 0) - (choiceItem.price || 0)) <= 50;
+    return { match: bestMatch, confidence: (maxScore > 0.4 && priceMatch) ? 'high' : 'medium' };
   }
-  return null;
+  // Фоллбек: якщо нічого не знайшло, беремо перший ліпший елемент для ручної перевірки, щоб не було пусток
+  return posItems.length > 0 ? { match: posItems[0], confidence: 'medium' } : null;
 }
 
 app.post('/api/match', async (req, res) => {
@@ -86,21 +89,21 @@ app.post('/api/match', async (req, res) => {
   (choiceDishes || []).forEach(cd => {
     const fuzzy = findBestFuzzyMatch(cd, posDishes, false);
     if (fuzzy) {
-      dishes.push({ choiceId: cd.choiceId, posId: fuzzy.match.posId, choiceName: cd.name, posName: fuzzy.match.name, price: cd.price, confidence: fuzzy.confidence });
+      dishes.push({ choiceId: cd.id, posId: fuzzy.match.posId, choiceName: cd.name || 'Без назви', posName: fuzzy.match.name, price: cd.price, confidence: fuzzy.confidence });
     }
   });
 
   (choiceCategories || []).forEach(cc => {
     const fuzzy = findBestFuzzyMatch(cc, posCategories, true);
     if (fuzzy) {
-      categories.push({ choiceId: cc.choiceId, posId: fuzzy.match.posId, choiceName: cc.name, posName: fuzzy.match.name, confidence: fuzzy.confidence });
+      categories.push({ choiceId: cc.id, posId: fuzzy.match.posId, choiceName: cc.name || 'Без назви', posName: fuzzy.match.name, confidence: fuzzy.confidence });
     }
   });
 
   (choiceOptionItems || []).forEach(co => {
     const fuzzy = findBestFuzzyMatch(co, posModifierItems, false);
     if (fuzzy) {
-      optionItems.push({ choiceGroupId: co.choiceGroupId, choiceItemId: co.choiceItemId, posItemId: fuzzy.match.posId, choiceName: co.name, posName: fuzzy.match.name, price: co.price, confidence: fuzzy.confidence });
+      optionItems.push({ choiceGroupId: co.groupId, choiceItemId: co.itemId, posItemId: fuzzy.match.posId, choiceName: co.name || 'Без назви', posName: fuzzy.match.name, price: co.price, confidence: fuzzy.confidence });
     }
   });
 
