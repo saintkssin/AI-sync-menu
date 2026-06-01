@@ -1038,25 +1038,27 @@ async function callGeminiMatch(choiceDishes, posDishes, choiceCats, posCats, cho
 choiceOpts.forEach(og => {
   (og.optionList || []).forEach(item => {
     
-    // НАШ ДЕТЕКТИВ: якщо у самого item немає назви, беремо назву групи + позицію/ціну, або шукаємо в og
+    // 1. Пробуємо взяти назву з самого елемента
     let finalName = getChoiceName(item, '');
     
-    if (!finalName) {
-      // Пробуємо взяти назву групи модифікаторів (наприклад, "Виберіть соус")
-      const groupName = getChoiceName(og, '');
-      if (groupName) {
-        // Робимо унікальну назву: "НазваГрупи + ціна" або позиція, щоб Dice Coefficient міг зачепитися
-        finalName = `${groupName} ${item.price ? item.price / 100 : item.position}`;
-      } else {
-        finalName = 'Option';
+    // 2. Якщо там порожньо, пробуємо взяти назву з батьківської групи og
+    if (!finalName && og) {
+      finalName = getChoiceName(og, '');
+    }
+
+    // 3. Якщо все ще порожньо, шукаємо в глобальному списку MODITEMS за допомогою posId
+    if (!finalName && item.posId) {
+      const globalModList = (typeof state !== 'undefined' && state.posMenu && state.posMenu.modItemsList) || [];
+      const foundGlobalMod = globalModList.find(m => m.posId === item.posId || m.id === item.posId);
+      if (foundGlobalMod) {
+        finalName = foundGlobalMod.name || foundGlobalMod.title || '';
       }
     }
 
-    if (finalName === 'Option') {
-      // Якщо взагалі глухо, виведемо групу подивитися, що в ній є
-      console.log("ПРОБЛЕМНА ГРУПА МОДИФІКАТОРІВ og:", og);
+    // 4. Якщо взагалі нічого не знайшли, ставимо дефолт
+    if (!finalName) {
+      finalName = 'Option';
     }
-
     choiceOptItems.push({
       groupId: og._id,
       itemId: item._id,
