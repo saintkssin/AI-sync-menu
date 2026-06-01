@@ -1035,12 +1035,19 @@ async function callGeminiMatch(choiceDishes, posDishes, choiceCats, posCats, cho
   const posCatList = posCats.map(c => ({ posId: c.posId, name: c.name }));
 
   const choiceOptItems = [];
-  choiceOpts.forEach(og => {
-    (og.optionList || []).forEach(item => {
-      choiceOptItems.push({ 
-        groupId: og._id, 
-        itemId: item._id, 
-        name: getChoiceName(item, 'Option'), 
+choiceOpts.forEach(og => {
+  (og.optionList || []).forEach(item => {
+    
+    // НАШ ДЕТЕКТИВ: ловимо модифікатори без імені
+    const finalName = getChoiceName(item, 'Option');
+    if (finalName === 'Option') {
+      console.log("ПРОБЛЕМНИЙ МОДИФІКАТОР CHOICE:", item);
+    }
+
+    choiceOptItems.push({
+      groupId: og._id,
+      itemId: item._id,
+      name: finalName,
         price: Math.round(item.price / 100) 
       });
     });
