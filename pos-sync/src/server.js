@@ -366,25 +366,35 @@ function buildPrompt(unmatchedDishes, posDishes, unmatchedCats, posCategories, u
   const cleanChoiceDishes = unmatchedDishes.map(d => ({ choiceId: d.id || d._id, name: d.name, price: d.price, hintPosId: d._nameHint })).slice(0, 300);
   const cleanPosDishes = posDishes.map(d => ({ posId: d.posId, name: d.name, price: d.price })).slice(0, 500);
 
-  const cleanChoiceCats = unmatchedCats.map(c => ({ choiceId: c.id || c._id, name: c.name })).slice(0, 100);
-  const cleanPosCats = posCategories.map(c => ({ posId: c.posId, name: c.name })).slice(0, 200);
+  const cleanChoiceCats = unmatchedCats.map(c => ({ choiceId: c.id || c._id, name: c.name }));
+  const cleanPosCats = (posCategories || []).map(c => ({ posId: c.posId || c.id, name: c.name }));
 
-  const cleanChoiceMods = (unmatchedMods || []).map(m => ({ choiceGroupId: m.groupId || m.choiceGroupId, choiceItemId: m.itemId || m.choiceItemId, name: m.name, price: m.price })).slice(0, 200);
-  const cleanPosMods = (posModifierItems || []).map(m => ({ posId: m.posId, name: m.name, price: m.price })).slice(0, 400);
+  const cleanChoiceMods = (unmatchedMods || []).map(m => ({ choiceGroupId: m.groupId || m.choiceGroupId, choiceItemId: m.itemId || m.choiceItemId, name: m.name, price: m.price }));
+  const cleanPosMods = (posModifierItems || []).map(m => ({ posId: m.posId || m.id, name: m.name, price: m.price }));
 
-  return `Ти — асистент для матчингу menu між двома системами.
-ПОВЕРНИ ВІДПОВІДЬ ВИКЛЮЧНО У ФОРМАТІ JSON ОБ'ЄКТА З ПОЛЯМИ: "dishes", "categories", "optionItems". Не додавай жодних маркдаун тегів чи тексту навколо.
+  return `ТИ — КЛЮЧОВИЙ АСИСТЕНТ ДЛЯ МАТЧИНГУ МЕНЮ РЕСТОРАНІВ. ТИ НЕ МАЄШ ПРАВА П ПОВЕРТАТИ ПОРОЖНІ МАСИВИ. ЯКЩО Є ХОЧ НАЙМЕНША СХОЖІСТЬ ПОЗИЦІЙ — ЗРОБИ МАТЧ.
 
-ЗАВДАННЯ: знайди відповідності між позиціями Choice і POS.
+ЗАВДАННЯ: Знайди пари між об'єктами з Choice та об'єктами з POS.
 
+КРИТЕРІЇ ПОШУКУ (ШУКАЙ НЕЧІТКЕ СПІВПАДІННЯ):
+1. Скорочення (напр. "Кола" і "Coca-Cola 0.5").
+2. Транслітерація або переклад (напр. "Поло" і "Куряче філе", "Суп" і "Soup").
+3. Перестановка слів місцями.
+4. Якщо ціни схожі (±30 грн) або назви мають спільні слова — ЦЕ МАТЧ. Став confidence="medium".
+
+ОБОВ'ЯЗКОВО ДЛЯ КОЖНОЇ ПОЗИЦІЇ З CHOICE ЗНАЙДИ НАЙБІЛЬШ СХОЖУ ПОЗИЦІЮ В POS!
+
+ДАНІ ДЛЯ РОБОТИ:
 СТРАВИ Choice: ${JSON.stringify(cleanChoiceDishes)}
-СТРАВИ POS: ${JSON.stringify(cleanPosDishes)}
+СТРАВИ POS для пошуку: ${JSON.stringify(cleanPosDishes)}
 
 КАТЕГОРІЇ Choice: ${JSON.stringify(cleanChoiceCats)}
-КАТЕГОРІЇ POS: ${JSON.stringify(cleanPosCats)}
+КАТЕГОРІЇ POS для пошуку: ${JSON.stringify(cleanPosCats)}
 
 ОПЦІЇ Choice: ${JSON.stringify(cleanChoiceMods)}
-МОДИФІКАТОРИ POS: ${JSON.stringify(cleanPosMods)}`;
+МОДИФІКАТОРИ POS для пошуку: ${JSON.stringify(cleanPosMods)}
+
+ПОВЕРНИ РЕЗУЛЬТАТ СУВОРО ЗА ЗАДАНОЮ JSON СХЕМОЮ. ЗАПОВНИ МАСИВИ ЗНАЙДЕНИМИ ПАРАМИ!`;
 }
 
 // ─── Start ────────────────────────────────────────────────────────
