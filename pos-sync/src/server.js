@@ -267,7 +267,59 @@ function localModMatch(choiceOptItems, posModItems) {
 async function callGemini(prompt, isRetry = false) {
   const body = {
     contents: [{ parts: [{ text: prompt }] }],
-    generationConfig: { temperature: 0.1, maxOutputTokens: 8192 }
+    generationConfig: { 
+      temperature: 0.1, 
+      maxOutputTokens: 8192,
+      responseMimeType: "application/json",
+      // Добавляем строгую схему, чтобы ИИ не смог вернуть пустой шаблон из промпта
+      responseSchema: {
+        type: "OBJECT",
+        properties: {
+          dishes: {
+            type: "ARRAY",
+            items: {
+              type: "OBJECT",
+              properties: {
+                choiceId: { type: "STRING" },
+                posId: { type: "STRING" },
+                choiceName: { type: "STRING" },
+                posName: { type: "STRING" },
+                price: { type: "NUMBER" },
+                confidence: { type: "STRING" }
+              }
+            }
+          },
+          categories: {
+            type: "ARRAY",
+            items: {
+              type: "OBJECT",
+              properties: {
+                choiceId: { type: "STRING" },
+                posId: { type: "STRING" },
+                choiceName: { type: "STRING" },
+                posName: { type: "STRING" },
+                confidence: { type: "STRING" }
+              }
+            }
+          },
+          optionItems: {
+            type: "ARRAY",
+            items: {
+              type: "OBJECT",
+              properties: {
+                choiceGroupId: { type: "STRING" },
+                choiceItemId: { type: "STRING" },
+                posItemId: { type: "STRING" },
+                choiceName: { type: "STRING" },
+                posName: { type: "STRING" },
+                price: { type: "NUMBER" },
+                confidence: { type: "STRING" }
+              }
+            }
+          }
+        }
+      }
+    }
   };
 
   const resp = await fetch(GEMINI_URL, {
@@ -279,14 +331,13 @@ async function callGemini(prompt, isRetry = false) {
   if (!resp.ok) throw new Error(`Gemini HTTP ${resp.status}: ${await resp.text()}`);
 
   const data = await resp.json();
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-  const clean = text.replace(/```json|```/g, '').trim();
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
 
   try {
-    return JSON.parse(clean);
+    return JSON.parse(text);
   } catch (e) {
     if (isRetry) throw new Error('Gemini returned invalid JSON after retry');
-    return callGemini(prompt + '\n\nВАЖЛИВО: поверни ТІЛЬКИ валідний JSON без пояснень.', true);
+    return callGemini(prompt, true);
   }
 }
 
@@ -313,14 +364,7 @@ function buildPrompt(unmatchedDishes, posDishes, unmatchedCats, posCategories, u
 КАТЕГОРІЇ POS (всі): ${JSON.stringify(posCategories)}
 
 ОПЦІЇ Choice (не знайдено): ${JSON.stringify((unmatchedMods || []).slice(0, 300))}
-МОДИФІКАТОРИ POS (всі): ${JSON.stringify((posModifierItems || []).slice(0, 300))}
-
-Поверни ТІЛЬКИ JSON (без пояснень, без markdown):
-{
-  "dishes": [{"choiceId":"...","posId":"...","choiceName":"...","posName":"...","price":0,"confidence":"high|medium"}],
-  "categories": [{"choiceId":"...","posId":"...","choiceName":"...","posName":"...","confidence":"high|medium"}],
-  "optionItems": [{"choiceGroupId":"...","choiceItemId":"...","posItemId":"...","choiceName":"...","posName":"...","price":0,"confidence":"high|medium"}]
-}`;
+МОДИФІКАТОРИ POS (всі): ${JSON.stringify((posModifierItems || []).slice(0, 300))}`;
 }
 
 // ─── Start ────────────────────────────────────────────────────────
