@@ -274,7 +274,58 @@ async function callGemini(prompt, isRetry = false) {
     generationConfig: { 
       temperature: 0.1, 
       maxOutputTokens: 8192,
-      responseMimeType: "application/json"
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: "object",
+        properties: {
+          dishes: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                choiceId: { type: "string" },
+                posId: { type: "string" },
+                choiceName: { type: "string" },
+                posName: { type: "string" },
+                price: { type: "number" },
+                confidence: { type: "string" }
+              },
+              required: ["choiceId", "posId", "choiceName", "posName", "confidence"]
+            }
+          },
+          categories: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                choiceId: { type: "string" },
+                posId: { type: "string" },
+                choiceName: { type: "string" },
+                posName: { type: "string" },
+                confidence: { type: "string" }
+              },
+              required: ["choiceId", "posId", "choiceName", "posName", "confidence"]
+            }
+          },
+          optionItems: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                choiceGroupId: { type: "string" },
+                choiceItemId: { type: "string" },
+                posItemId: { type: "string" },
+                choiceName: { type: "string" },
+                posName: { type: "string" },
+                price: { type: "number" },
+                confidence: { type: "string" }
+              },
+              required: ["choiceGroupId", "choiceItemId", "posItemId", "choiceName", "posName", "confidence"]
+            }
+          }
+        },
+        required: ["dishes", "categories", "optionItems"]
+      }
     }
   };
 
@@ -301,13 +352,12 @@ async function callGemini(prompt, isRetry = false) {
       clean = clean.substring(startIdx, endIdx + 1);
     }
     
-    const parsed = JSON.parse(clean);
-    return parsed;
+    return JSON.parse(clean);
   } catch (e) {
     if (isRetry) {
       return { dishes: [], categories: [], optionItems: [] };
     }
-    return callGemini(prompt + '\n\nУВАГА: Поверни тільки валідний JSON-код з полями {"dishes":[], "categories":[], "optionItems":[]} без маркдаун кавичок!', true);
+    return callGemini(prompt + '\n\nУВАГА: Поверни тільки валідний JSON-код за схемою!', true);
   }
 }
 
