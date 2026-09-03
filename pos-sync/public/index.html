@@ -482,6 +482,23 @@
 
   /* HIDDEN */
   .hidden { display: none !important; }
+
+  /* MANUAL MATCH MODAL */
+  .mm-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.75); z-index:200; display:flex; align-items:center; justify-content:center; }
+  .mm-card { background:var(--surface); border:1px solid var(--border2); border-radius:10px; width:560px; max-height:80vh; display:flex; flex-direction:column; overflow:hidden; box-shadow:0 20px 60px rgba(0,0,0,0.5); }
+  .mm-head { padding:16px 20px; border-bottom:1px solid var(--border); display:flex; align-items:flex-start; justify-content:space-between; flex-shrink:0; }
+  .mm-title { font-size:11px; font-weight:600; color:var(--text2); font-family:var(--mono); text-transform:uppercase; letter-spacing:0.08em; }
+  .mm-choice-name { font-size:13px; color:var(--text); margin-top:4px; font-weight:500; }
+  .mm-search-wrap { padding:12px 20px; border-bottom:1px solid var(--border); flex-shrink:0; }
+  .mm-search-input { width:100%; background:var(--surface2); border:1px solid var(--border2); border-radius:5px; padding:9px 12px; color:var(--text); font-family:var(--mono); font-size:13px; outline:none; }
+  .mm-search-input:focus { border-color:var(--accent); }
+  .mm-list { overflow-y:auto; flex:1; }
+  .mm-item { padding:10px 20px; border-bottom:1px solid var(--border); cursor:pointer; display:flex; justify-content:space-between; align-items:center; transition:background 0.1s; }
+  .mm-item:hover { background:var(--surface2); }
+  .mm-item-name { font-size:13px; color:var(--text); }
+  .mm-item-meta { font-size:10px; color:var(--text3); font-family:var(--mono); text-align:right; }
+  .btn-search { background:rgba(91,143,255,0.1); color:var(--accent); border:1px solid rgba(91,143,255,0.3); padding:3px 9px; font-size:11px; border-radius:4px; cursor:pointer; font-family:var(--mono); white-space:nowrap; }
+  .btn-search:hover { background:rgba(91,143,255,0.2); }
 </style>
 </head>
 <body>
@@ -683,6 +700,22 @@
 
 </div>
 
+<div id="manualMatchModal" class="hidden mm-overlay" onclick="if(event.target===this)closeManualMatch()">
+  <div class="mm-card">
+    <div class="mm-head">
+      <div>
+        <div class="mm-title">Ручне зіставлення</div>
+        <div class="mm-choice-name" id="mmChoiceName"></div>
+      </div>
+      <button class="btn btn-ghost" style="padding:4px 12px;font-size:12px" onclick="closeManualMatch()">✕</button>
+    </div>
+    <div class="mm-search-wrap">
+      <input id="mmSearchInput" class="mm-search-input" placeholder="Пошук по назві POS-позиції..." oninput="renderMmResults(this.value)">
+    </div>
+    <div id="mmResultsList" class="mm-list"></div>
+  </div>
+</div>
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 // ===================== STATE =====================
@@ -767,55 +800,49 @@ async function connectToken() {
 }
 
 // ===================== LOAD CHOICE MENU =====================
+function choiceFetch(path) {
+  return fetch('/api/choice/menu/' + state.language + path, { headers: { 'x-choice-token': state.token } })
+    .then(r => r.json())
+    .catch(() => []);
+}
+
 async function loadChoiceMenu() {
   setStep(1);
   document.getElementById('choiceMenuInfo').textContent = 'Завантаження меню Choice...';
 
   try {
-    const secR = await fetch('/api/choice/menu/' + state.language + '/sections/list', {
-      headers: { 'x-choice-token': state.token }
-    });
-    const sections = await secR.json();
+    const sections = await choiceFetch('/sections/list');
     if (!Array.isArray(sections) || sections.length === 0) {
       document.getElementById('choiceMenuInfo').textContent = 'Меню порожнє';
       return;
     }
 
-    let allCategories = [], allDishes = [], allOptions = [];
+    const sectionResults = await Promise.all(sections.map(async sec => {
+      const [cats, opts] = await Promise.all([
+        choiceFetch('/categories/list/' + sec._id),
+        choiceFetch('/options/list/' + sec._id)
+      ]);
 
-    for (const sec of sections) {
-      const catR = await fetch('/api/choice/menu/' + state.language + '/categories/list/' + sec._id, {
-        headers: { 'x-choice-token': state.token }
-      });
-      const cats = await catR.json();
-      if (Array.isArray(cats)) {
-        allCategories.push(...cats);
-        for (const cat of cats) {
-          const dishR = await fetch('/api/choice/menu/' + state.language + '/dishes/list/' + cat._id, {
-            headers: { 'x-choice-token': state.token }
-          });
-          const dishes = await dishR.json();
-          if (Array.isArray(dishes)) {
-            dishes.forEach(d => { d.category = d.category || cat._id; d.categoryName = cat.name; });
-            allDishes.push(...dishes);
-          }
-        }
-      }
-      const optR = await fetch('/api/choice/menu/' + state.language + '/options/list/' + sec._id, {
-        headers: { 'x-choice-token': state.token }
-      });
-      const opts = await optR.json();
-      if (Array.isArray(opts)) {
-        for (const opt of opts) {
-          const fullR = await fetch('/api/choice/menu/' + state.language + '/options/' + opt._id, {
-            headers: { 'x-choice-token': state.token }
-          });
-          const fullOpt = await fullR.json();
-          if (fullOpt && fullOpt._id) allOptions.push(fullOpt);
-          else allOptions.push(opt);
-        }
-      }
-    }
+      const dishes = (await Promise.all(
+        (Array.isArray(cats) ? cats : []).map(cat =>
+          choiceFetch('/dishes/list/' + cat._id).then(list =>
+            (Array.isArray(list) ? list : []).map(d => ({ ...d, category: d.category || cat._id, categoryName: cat.name }))
+          )
+        )
+      )).flat();
+
+      const fullOpts = await Promise.all(
+        (Array.isArray(opts) ? opts : []).map(opt =>
+          choiceFetch('/options/' + opt._id).then(full => (full && full._id) ? full : opt)
+        )
+      );
+
+      return { cats: Array.isArray(cats) ? cats : [], dishes, opts: fullOpts };
+    }));
+
+    const allCategories = sectionResults.flatMap(r => r.cats);
+    const allDishes     = sectionResults.flatMap(r => r.dishes);
+    const allOptions    = sectionResults.flatMap(r => r.opts);
 
     state.choiceMenu = { categories: allCategories, dishes: allDishes, options: allOptions };
     document.getElementById('choiceMenuInfo').textContent =
@@ -1119,7 +1146,7 @@ choiceOpts.forEach(og => {
   });
   choiceOpts.forEach(og => {
     (og.optionList || []).forEach(item => {
-      if (!matchedOptIds.has(item._id)) unmatched.push({ type: 'option', choiceId: item._id, choiceName: getChoiceName(item, 'Без назви'), price: Math.round(item.price / 100), reason: 'Не знайдено відповідність' });
+      if (!matchedOptIds.has(item._id)) unmatched.push({ type: 'option', choiceGroupId: og._id, choiceId: item._id, choiceName: getChoiceName(item, 'Без назви'), price: Math.round(item.price / 100), reason: 'Не знайдено відповідність' });
     });
   });
 
@@ -1167,6 +1194,7 @@ function renderResults() {
         <td>
           <button class="btn-confirm approve" onclick="reviewAction(${i}, true)" id="approveBtn${i}">✓ Так</button>
           <button class="btn-confirm reject" onclick="reviewAction(${i}, false)" id="rejectBtn${i}">✗ Ні</button>
+          <button class="btn-search" onclick="openManualMatchById('${m.choiceId}','${m.type}')" style="margin-left:6px" title="Знайти інше відповідність">🔍</button>
         </td>
       </tr>`;
     });
@@ -1183,9 +1211,12 @@ function renderResults() {
     if (unmatchedCats.length > 0) {
       ub.innerHTML += `<div class="section-title">Категорії без відповідності (${unmatchedCats.length})</div>`;
       unmatchedCats.forEach(u => {
-        ub.innerHTML += `<div class="unmatched-item" style="padding: 10px 12px;">
-          <div class="unmatched-name">${esc(u.choiceName)}</div>
-          <div class="unmatched-reason">${esc(u.reason)}</div>
+        ub.innerHTML += `<div class="unmatched-item" style="padding: 10px 12px;display:flex;justify-content:space-between;align-items:center">
+          <div>
+            <div class="unmatched-name">${esc(u.choiceName)}</div>
+            <div class="unmatched-reason">${esc(u.reason)}</div>
+          </div>
+          <button class="btn-search" onclick="openManualMatchById('${u.choiceId}','category')">🔍 Знайти</button>
         </div>`;
       });
     }
@@ -1207,11 +1238,12 @@ function renderResults() {
             <span style="font-size:10px;color:var(--text3);margin-left:8px">${group.items.length} позицій</span>
           </div>`;
         group.items.forEach(u => {
-          ub.innerHTML += `<div class="unmatched-item" style="padding: 10px 12px 10px 20px;">
+          ub.innerHTML += `<div class="unmatched-item" style="padding: 10px 12px 10px 20px;display:flex;justify-content:space-between;align-items:center">
             <div>
               <div class="unmatched-name">${esc(u.choiceName)}${u.price ? `<span style="color:var(--text3);font-size:11px;margin-left:6px">${u.price} грн</span>` : ''}</div>
+              <div class="unmatched-reason">${esc(u.reason)}</div>
             </div>
-            <div class="unmatched-reason">${esc(u.reason)}</div>
+            <button class="btn-search" onclick="openManualMatchById('${u.choiceId}','dish')">🔍 Знайти</button>
           </div>`;
         });
       });
@@ -1221,9 +1253,12 @@ function renderResults() {
     if (unmatchedOpts.length > 0) {
       ub.innerHTML += `<div class="section-title" style="margin-top:8px">Опції без відповідності (${unmatchedOpts.length})</div>`;
       unmatchedOpts.forEach(u => {
-        ub.innerHTML += `<div class="unmatched-item" style="padding: 10px 12px;">
-          <div class="unmatched-name">${esc(u.choiceName)}${u.price ? `<span style="color:var(--text3);font-size:11px;margin-left:6px">${u.price} грн</span>` : ''}</div>
-          <div class="unmatched-reason">${esc(u.reason)}</div>
+        ub.innerHTML += `<div class="unmatched-item" style="padding: 10px 12px;display:flex;justify-content:space-between;align-items:center">
+          <div>
+            <div class="unmatched-name">${esc(u.choiceName)}${u.price ? `<span style="color:var(--text3);font-size:11px;margin-left:6px">${u.price} грн</span>` : ''}</div>
+            <div class="unmatched-reason">${esc(u.reason)}</div>
+          </div>
+          <button class="btn-search" onclick="openManualMatchById('${u.choiceId}','option')">🔍 Знайти</button>
         </div>`;
       });
     }
@@ -1428,6 +1463,89 @@ function resetAll() {
   document.getElementById('retrySyncWrap').classList.add('hidden');
   loadChoiceMenu();
   setStep(1);
+}
+
+// ===================== MANUAL MATCH =====================
+let mmCtx = null;
+let mmFiltered = [];
+
+function openManualMatchById(choiceId, itemType) {
+  const ri = state.results.review.findIndex(r => r.choiceId === choiceId);
+  if (ri !== -1) { openManualMatch('review', ri, itemType); return; }
+  const ui = state.results.unmatched.findIndex(u => u.choiceId === choiceId);
+  if (ui !== -1) { openManualMatch('unmatched', ui, itemType); }
+}
+
+function openManualMatch(source, index, itemType) {
+  if (!state.posMenu) return;
+  mmCtx = { source, index, itemType };
+  const item = source === 'review' ? state.results.review[index] : state.results.unmatched[index];
+  document.getElementById('mmChoiceName').textContent = item.choiceName;
+  document.getElementById('mmSearchInput').value = '';
+  renderMmResults('');
+  document.getElementById('manualMatchModal').classList.remove('hidden');
+  setTimeout(() => document.getElementById('mmSearchInput').focus(), 50);
+}
+
+function closeManualMatch() {
+  document.getElementById('manualMatchModal').classList.add('hidden');
+  mmCtx = null;
+  mmFiltered = [];
+}
+
+function getMmPosItems() {
+  if (!mmCtx || !state.posMenu) return [];
+  if (mmCtx.itemType === 'category') return state.posMenu.categories || [];
+  if (mmCtx.itemType === 'option')   return state.posMenu.modItemsList || [];
+  return state.posMenu.dishes || [];
+}
+
+function renderMmResults(query) {
+  const q = (query || '').toLowerCase().trim();
+  const all = getMmPosItems();
+  mmFiltered = q ? all.filter(i => (i.name || '').toLowerCase().includes(q)) : all;
+  const list = document.getElementById('mmResultsList');
+  if (!mmFiltered.length) {
+    list.innerHTML = '<div class="empty"><div class="empty-icon">🔍</div>Нічого не знайдено</div>';
+    return;
+  }
+  list.innerHTML = mmFiltered.slice(0, 100).map((item, i) => `
+    <div class="mm-item" onclick="confirmManualMatch(${i})">
+      <div class="mm-item-name">${esc(item.name)}</div>
+      <div class="mm-item-meta">${esc(item.posId)}${item.price ? '<br>' + item.price + ' грн' : ''}</div>
+    </div>
+  `).join('');
+}
+
+function confirmManualMatch(i) {
+  if (!mmCtx) return;
+  const posItem = mmFiltered[i];
+  if (!posItem) return;
+  const { source, index, itemType } = mmCtx;
+
+  if (source === 'review') {
+    const rev = state.results.review[index];
+    state.results.matched.push({ ...rev, posId: posItem.posId, posName: posItem.name, confidence: 'high' });
+    state.results.review.splice(index, 1);
+  } else {
+    const um = state.results.unmatched[index];
+    state.results.matched.push({
+      type: um.type,
+      choiceId: um.choiceId,
+      choiceGroupId: um.choiceGroupId,
+      posId: posItem.posId,
+      choiceName: um.choiceName,
+      posName: posItem.name,
+      price: um.price ?? posItem.price,
+      confidence: 'high'
+    });
+    state.results.unmatched.splice(index, 1);
+  }
+
+  closeManualMatch();
+  renderResults();
+  switchTab('matched');
+  updateApplyInfo();
 }
 </script>
 </body>

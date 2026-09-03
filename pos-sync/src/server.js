@@ -36,13 +36,17 @@ app.all('/api/choice/*', async (req, res) => {
   const choicePath = req.path.replace('/api/choice', '');
   const url = `https://open-api.choiceqr.com${choicePath}${req.query && Object.keys(req.query).length ? '?' + new URLSearchParams(req.query) : ''}`;
   try {
-    const fetchOpts = { method: req.method, headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` } };
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10000);
+    const fetchOpts = { method: req.method, headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }, signal: controller.signal };
     if (['POST', 'PUT', 'PATCH'].includes(req.method)) fetchOpts.body = JSON.stringify(req.body);
     const r = await fetch(url, fetchOpts);
+    clearTimeout(timer);
     if (r.status === 204) return res.status(204).send();
     if ((r.headers.get('content-type') || '').includes('application/json')) return res.status(r.status).json(await r.json());
     return res.status(r.status).send(await r.text());
   } catch (err) {
+    if (err.name === 'AbortError') return res.status(504).json({ error: 'Choice API timeout' });
     res.status(500).json({ error: err.message });
   }
 });
@@ -78,8 +82,7 @@ function findBestFuzzyMatch(choiceItem, posItems, isCat = false) {
     const priceMatch = isCat ? true : Math.abs((bestMatch.price || 0) - (choiceItem.price || 0)) <= 50;
     return { match: bestMatch, confidence: (maxScore > 0.4 && priceMatch) ? 'high' : 'medium' };
   }
-  // Фоллбек: якщо нічого не знайшло, беремо перший ліпший елемент для ручної перевірки, щоб не було пусток
-  return posItems.length > 0 ? { match: posItems[0], confidence: 'medium' } : null;
+  return null;
 }
 
 app.post('/api/match', async (req, res) => {
