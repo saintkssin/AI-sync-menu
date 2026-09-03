@@ -1,17 +1,22 @@
 require('dotenv').config();
 const express = require('express');
-const cors = require('cors');
-const path = require('path');
+const cors    = require('cors');
+const path    = require('path');
+
+// Dice logic extracted to shared module (imported by ai-match.js too — avoid duplication)
+const { findBestFuzzyMatch } = require('./dice');
+// AI semantic layer — second pass for medium/unmatched items. Gracefully disabled if no API key.
+const { aiMatchItem, ENABLED: AI_ENABLED } = require('./ai-match');
 
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, '../public')));
 
-const CHOICE_CLIENT_ID = process.env.CHOICE_CLIENT_ID;
+const CHOICE_CLIENT_ID     = process.env.CHOICE_CLIENT_ID;
 const CHOICE_CLIENT_SECRET = process.env.CHOICE_CLIENT_SECRET;
 
-app.get('/health', (req, res) => res.json({ ok: true }));
+app.get('/health', (req, res) => res.json({ ok: true, aiEnabled: AI_ENABLED }));
 
 app.get('/callback', async (req, res) => {
   const { code } = req.query;
@@ -51,47 +56,36 @@ app.all('/api/choice/*', async (req, res) => {
   }
 });
 
-function diceCoefficient(str1, str2) {
-  const s1 = String(str1 || '').toLowerCase().replace(/\s+/g, '');
-  const s2 = String(str2 || '').toLowerCase().replace(/\s+/g, '');
-  if (!s1 || !s2) return 0;
-  if (s1 === s2) return 1;
-  if (s1.length < 2 || s2.length < 2) return 0;
-  const bigrams1 = new Map();
-  for (let i = 0; i < s1.length - 1; i++) {
-    const bigram = s1.substring(i, i + 2);
-    bigrams1.set(bigram, (bigrams1.get(bigram) || 0) + 1);
-  }
-  let intersection = 0;
-  for (let i = 0; i < s2.length - 1; i++) {
-    const bigram = s2.substring(i, i + 2);
-    const count = bigrams1.get(bigram) || 0;
-    if (count > 0) { intersection++; bigrams1.set(bigram, count - 1); }
-  }
-  return (2.0 * intersection) / (s1.length + s2.length - 2);
-}
-
-function findBestFuzzyMatch(choiceItem, posItems, isCat = false) {
-  let bestMatch = null; let maxScore = 0;
-  const cName = choiceItem.name || choiceItem.choiceName || '';
-  for (const pi of posItems) {
-    const score = diceCoefficient(cName, pi.name);
-    if (score > maxScore) { maxScore = score; bestMatch = pi; }
-  }
-  if (bestMatch) {
-    const priceMatch = isCat ? true : Math.abs((bestMatch.price || 0) - (choiceItem.price || 0)) <= 50;
-    return { match: bestMatch, confidence: (maxScore > 0.4 && priceMatch) ? 'high' : 'medium' };
-  }
-  return null;
-}
-
+// /api/match: cascade matching — Dice first, then AI for uncertain results.
+//
+// Flow:
+//   1. Dice pass → high confidence items go directly to matched (auto-apply).
+//      Medium confidence items go to review. No-match items are unmatched.
+//   2. AI pass (if enabled) → runs on medium + unmatched items.
+//      AI suggestions ALWAYS go to review (aiSuggested=true), never auto-apply.
+//      If AI fails or returns null → item stays unmatched. No corruption risk.
+//
+// Why run AI on medium-confidence Dice items too?
+// Medium means Dice found something, but isn't sure. AI can confirm or improve
+// the suggestion using semantic understanding (synonyms, abbreviations, Ukrainian
+// transliterations) that bigram-based Dice can't see.
 app.post('/api/match', async (req, res) => {
   const { choiceDishes, posDishes, choiceCategories, posCategories, choiceOptionItems, posModifierItems } = req.body;
-  const dishes = []; const categories = []; const optionItems = [];
+
+  // ── Step 1: Dice matching ─────────────────────────────────────────────────
+  const dishes      = [];
+  const categories  = [];
+  const optionItems = [];
+
+  // Track which Choice items Dice matched, so we know the unmatched set for AI.
+  const matchedDishIds = new Set();
+  const matchedCatIds  = new Set();
+  const matchedOptIds  = new Set();
 
   (choiceDishes || []).forEach(cd => {
     const fuzzy = findBestFuzzyMatch(cd, posDishes, false);
     if (fuzzy) {
+      matchedDishIds.add(cd.id);
       dishes.push({ choiceId: cd.id, posId: fuzzy.match.posId, choiceName: cd.name || 'Без назви', posName: fuzzy.match.name, price: cd.price, confidence: fuzzy.confidence });
     }
   });
@@ -99,6 +93,7 @@ app.post('/api/match', async (req, res) => {
   (choiceCategories || []).forEach(cc => {
     const fuzzy = findBestFuzzyMatch(cc, posCategories, true);
     if (fuzzy) {
+      matchedCatIds.add(cc.id);
       categories.push({ choiceId: cc.id, posId: fuzzy.match.posId, choiceName: cc.name || 'Без назви', posName: fuzzy.match.name, confidence: fuzzy.confidence });
     }
   });
@@ -106,12 +101,80 @@ app.post('/api/match', async (req, res) => {
   (choiceOptionItems || []).forEach(co => {
     const fuzzy = findBestFuzzyMatch(co, posModifierItems, false);
     if (fuzzy) {
+      matchedOptIds.add(co.itemId);
       optionItems.push({ choiceGroupId: co.groupId, choiceItemId: co.itemId, posItemId: fuzzy.match.posId, choiceName: co.name || 'Без назви', posName: fuzzy.match.name, price: co.price, confidence: fuzzy.confidence });
     }
   });
+
+  // ── Step 2: AI pass ───────────────────────────────────────────────────────
+  if (AI_ENABLED) {
+    // Collect AI targets: medium-confidence Dice results + completely unmatched items.
+    // High-confidence Dice results are skipped — they're deterministically correct.
+    const dishTargets = [
+      ...dishes.filter(d => d.confidence === 'medium').map(d => ({ ...d, _fromReview: true })),
+      ...(choiceDishes || []).filter(cd => !matchedDishIds.has(cd.id)).map(cd => ({
+        choiceId: cd.id, choiceName: cd.name || 'Без назви', price: cd.price, _fromReview: false
+      }))
+    ];
+    const catTargets = [
+      ...categories.filter(c => c.confidence === 'medium').map(c => ({ ...c, _fromReview: true })),
+      ...(choiceCategories || []).filter(cc => !matchedCatIds.has(cc.id)).map(cc => ({
+        choiceId: cc.id, choiceName: cc.name || 'Без назви', _fromReview: false
+      }))
+    ];
+    const optTargets = [
+      ...optionItems.filter(o => o.confidence === 'medium').map(o => ({ ...o, _fromReview: true })),
+      ...(choiceOptionItems || []).filter(co => !matchedOptIds.has(co.itemId)).map(co => ({
+        choiceGroupId: co.groupId, choiceItemId: co.itemId, choiceName: co.name || 'Без назви', price: co.price, _fromReview: false
+      }))
+    ];
+
+    // Run all AI calls in parallel.
+    // ponytail: no concurrency limit; add p-limit if menus exceed ~150 unmatched items
+    const [dishAI, catAI, optAI] = await Promise.all([
+      Promise.all(dishTargets.map(t => aiMatchItem(t.choiceName, t.price,     posDishes || [],        false).then(r => ({ t, r })))),
+      Promise.all(catTargets .map(t => aiMatchItem(t.choiceName, null,        posCategories || [],    true ).then(r => ({ t, r })))),
+      Promise.all(optTargets .map(t => aiMatchItem(t.choiceName, t.price,     posModifierItems || [], false).then(r => ({ t, r }))))
+    ]);
+
+    // Merge AI results back into the response arrays.
+    // Why confidence stays 'medium' for AI? See note in aiMatchItem: AI confidence
+    // is not the same as Dice confidence. We always force human review for AI output.
+    for (const { t, r } of dishAI) {
+      if (!r) continue;
+      if (t._fromReview) {
+        // Update existing medium-confidence Dice item with AI's (possibly better) suggestion
+        const existing = dishes.find(d => d.choiceId === t.choiceId);
+        if (existing) Object.assign(existing, { posId: r.match.posId, posName: r.match.name, aiSuggested: true, aiReason: r.reason, aiConfidence: r.confidence });
+      } else {
+        dishes.push({ choiceId: t.choiceId, posId: r.match.posId, choiceName: t.choiceName, posName: r.match.name, price: t.price, confidence: 'medium', aiSuggested: true, aiReason: r.reason, aiConfidence: r.confidence });
+      }
+    }
+    for (const { t, r } of catAI) {
+      if (!r) continue;
+      if (t._fromReview) {
+        const existing = categories.find(c => c.choiceId === t.choiceId);
+        if (existing) Object.assign(existing, { posId: r.match.posId, posName: r.match.name, aiSuggested: true, aiReason: r.reason, aiConfidence: r.confidence });
+      } else {
+        categories.push({ choiceId: t.choiceId, posId: r.match.posId, choiceName: t.choiceName, posName: r.match.name, confidence: 'medium', aiSuggested: true, aiReason: r.reason, aiConfidence: r.confidence });
+      }
+    }
+    for (const { t, r } of optAI) {
+      if (!r) continue;
+      if (t._fromReview) {
+        const existing = optionItems.find(o => o.choiceItemId === t.choiceItemId);
+        if (existing) Object.assign(existing, { posItemId: r.match.posId, posName: r.match.name, aiSuggested: true, aiReason: r.reason, aiConfidence: r.confidence });
+      } else {
+        optionItems.push({ choiceGroupId: t.choiceGroupId, choiceItemId: t.choiceItemId, posItemId: r.match.posId, choiceName: t.choiceName, posName: r.match.name, price: t.price, confidence: 'medium', aiSuggested: true, aiReason: r.reason, aiConfidence: r.confidence });
+      }
+    }
+  }
 
   res.json({ dishes, categories, optionItems });
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`✓ POS-Sync server on http://localhost:${PORT}`));
+app.listen(PORT, () => {
+  console.log(`✓ POS-Sync server on http://localhost:${PORT}`);
+  console.log(`  AI matching: ${AI_ENABLED ? 'enabled (claude-haiku)' : 'disabled (set ANTHROPIC_API_KEY to enable)'}`);
+});
