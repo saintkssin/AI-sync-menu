@@ -1234,6 +1234,7 @@ function renderResults() {
           <button class="btn-confirm approve" onclick="reviewAction(${i}, true)" id="approveBtn${i}">✓ Так</button>
           <button class="btn-confirm reject" onclick="reviewAction(${i}, false)" id="rejectBtn${i}">✗ Ні</button>
           <button class="btn-search" onclick="openManualMatchById('${m.choiceId}','${m.type}')" style="margin-left:6px" title="Знайти інше відповідність">🔍</button>
+          <div id="clearLabel${i}" style="display:none;font-size:10px;color:var(--red);margin-top:4px;font-family:var(--mono)">← posID буде очищено</div>
         </td>
       </tr>`;
     });
@@ -1321,12 +1322,17 @@ function reviewAction(i, approve) {
   state.results.review[i].approved = approve;
   document.getElementById('approveBtn' + i).className = 'btn-confirm ' + (approve ? 'approved' : 'approve');
   document.getElementById('rejectBtn' + i).className = 'btn-confirm ' + (!approve ? 'rejected' : 'reject');
+  const lbl = document.getElementById('clearLabel' + i);
   if (approve) {
     document.getElementById('approveBtn' + i).textContent = '✓ Підтверджено';
     document.getElementById('rejectBtn' + i).textContent = '✗ Ні';
+    state.results.review[i].clearId = false;
+    if (lbl) lbl.style.display = 'none';
   } else {
     document.getElementById('rejectBtn' + i).textContent = '✗ Відхилено';
     document.getElementById('approveBtn' + i).textContent = '✓ Так';
+    state.results.review[i].clearId = true;
+    if (lbl) lbl.style.display = '';
   }
   updateApplyInfo();
 }
@@ -1334,8 +1340,11 @@ function reviewAction(i, approve) {
 function updateApplyInfo() {
   const { matched, review } = state.results;
   const approved = review.filter(r => r.approved === true).length;
+  const clearing = review.filter(r => r.clearId === true && r.approved !== true).length;
   const total = matched.length + approved;
-  document.getElementById('applyInfo').textContent = `До застосування: ${total} позицій (${matched.length} авто + ${approved} підтверджено)`;
+  let info = `До застосування: ${total} позицій (${matched.length} авто + ${approved} підтверджено)`;
+  if (clearing > 0) info += ` · очистити posID: ${clearing}`;
+  document.getElementById('applyInfo').textContent = info;
 }
 
 function switchTab(tab) {
@@ -1351,7 +1360,8 @@ async function applySync() {
   setStep(4);
   const toApply = [
     ...state.results.matched,
-    ...state.results.review.filter(r => r.approved === true)
+    ...state.results.review.filter(r => r.approved === true),
+    ...state.results.review.filter(r => r.clearId === true && r.approved !== true).map(r => ({ ...r, posId: null, _isClear: true }))
   ];
 
   document.getElementById('applyLog').innerHTML = '';
@@ -1379,6 +1389,8 @@ async function applySync() {
       done++;
       if (item.type === 'optionGroup') {
         addApplyLog(`Група опцій (${item.items.length} елементів)`, 'ok');
+      } else if (item._isClear) {
+        addApplyLog(item.choiceName + ' — posID очищено', 'ok');
       } else {
         addApplyLog(item.choiceName, 'ok');
       }
