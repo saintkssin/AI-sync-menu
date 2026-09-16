@@ -86,7 +86,7 @@ app.post('/api/match', async (req, res) => {
     const fuzzy = findBestFuzzyMatch(cd, posDishes, false);
     if (fuzzy) {
       matchedDishIds.add(cd.id);
-      dishes.push({ choiceId: cd.id, posId: fuzzy.match.posId, choiceName: cd.name || 'Без назви', posName: fuzzy.match.name, price: cd.price, posPrice: fuzzy.match.price, confidence: fuzzy.confidence, choiceCategoryName: cd.categoryName || '', posCategoryName: fuzzy.match.category || '' });
+      dishes.push({ choiceId: cd.id, posId: fuzzy.match.posId, choiceName: cd.name || 'Без назви', posName: fuzzy.match.name, price: cd.price, posPrice: fuzzy.match.price, confidence: fuzzy.confidence, _diceScore: fuzzy.score, choiceCategoryName: cd.categoryName || '', posCategoryName: fuzzy.match.category || '' });
     }
   });
 
@@ -102,14 +102,18 @@ app.post('/api/match', async (req, res) => {
     const fuzzy = findBestFuzzyMatch(co, posModifierItems, false);
     if (fuzzy) {
       matchedOptIds.add(co.itemId);
-      optionItems.push({ choiceGroupId: co.groupId, choiceItemId: co.itemId, posItemId: fuzzy.match.posId, choiceName: co.name || 'Без назви', posName: fuzzy.match.name, price: co.price, posPrice: fuzzy.match.price, confidence: fuzzy.confidence, choiceGroupName: co.groupName || '', posGroupName: fuzzy.match.groupName || '' });
+      optionItems.push({ choiceGroupId: co.groupId, choiceItemId: co.itemId, posItemId: fuzzy.match.posId, choiceName: co.name || 'Без назви', posName: fuzzy.match.name, price: co.price, posPrice: fuzzy.match.price, confidence: fuzzy.confidence, _diceScore: fuzzy.score, choiceGroupName: co.groupName || '', posGroupName: fuzzy.match.groupName || '' });
     }
   });
 
-  // ── Step 2: AI pass ───────────────────────────────────────────────────────
+  // ── Steps 2 + 3: AI pass (run in parallel) ───────────────────────────────
+  // Step 2: fill in medium-confidence Dice results and unmatched items.
+  // Step 3: verify high-confidence Dice matches where score < 0.8 (catches
+  //         false positives like "Dr. Pepper" → "Чай" matched by shared suffix).
   if (AI_ENABLED) {
-    // Collect AI targets: medium-confidence Dice results + completely unmatched items.
-    // High-confidence Dice results are skipped — they're deterministically correct.
+    const VERIFY_THRESHOLD = 0.8;
+
+    // Step 2 targets
     const dishTargets = [
       ...dishes.filter(d => d.confidence === 'medium').map(d => ({ ...d, _fromReview: true })),
       ...(choiceDishes || []).filter(cd => !matchedDishIds.has(cd.id)).map(cd => ({
@@ -129,17 +133,22 @@ app.post('/api/match', async (req, res) => {
       }))
     ];
 
-    // Run all AI calls in parallel.
+    // Step 3 targets — high Dice matches that aren't near-exact (score < threshold)
+    const verifyDishTargets = dishes.filter(d => d.confidence === 'high' && (d._diceScore || 1) < VERIFY_THRESHOLD);
+    const verifyCatTargets  = categories.filter(c => c.confidence === 'high' && (c._diceScore || 1) < VERIFY_THRESHOLD);
+    const verifyOptTargets  = optionItems.filter(o => o.confidence === 'high' && (o._diceScore || 1) < VERIFY_THRESHOLD);
+
     // ponytail: no concurrency limit; add p-limit if menus exceed ~150 unmatched items
-    const [dishAI, catAI, optAI] = await Promise.all([
-      Promise.all(dishTargets.map(t => aiMatchItem(t.choiceName, t.price,     posDishes || [],        false, t.choiceCategoryName || '').then(r => ({ t, r })))),
-      Promise.all(catTargets .map(t => aiMatchItem(t.choiceName, null,        posCategories || [],    true ).then(r => ({ t, r })))),
-      Promise.all(optTargets .map(t => aiMatchItem(t.choiceName, t.price,     posModifierItems || [], false, t.choiceGroupName || '').then(r => ({ t, r }))))
+    const [dishAI, catAI, optAI, verifyDish, verifyCat, verifyOpt] = await Promise.all([
+      Promise.all(dishTargets      .map(t => aiMatchItem(t.choiceName, t.price, posDishes        || [], false, t.choiceCategoryName || '').then(r => ({ t, r })))),
+      Promise.all(catTargets       .map(t => aiMatchItem(t.choiceName, null,    posCategories    || [], true                            ).then(r => ({ t, r })))),
+      Promise.all(optTargets       .map(t => aiMatchItem(t.choiceName, t.price, posModifierItems || [], false, t.choiceGroupName    || '').then(r => ({ t, r })))),
+      Promise.all(verifyDishTargets.map(d => aiMatchItem(d.choiceName, d.price, posDishes        || [], false, d.choiceCategoryName || '').then(r => ({ d, r })))),
+      Promise.all(verifyCatTargets .map(d => aiMatchItem(d.choiceName, null,    posCategories    || [], true                            ).then(r => ({ d, r })))),
+      Promise.all(verifyOptTargets .map(d => aiMatchItem(d.choiceName, d.price, posModifierItems || [], false, d.choiceGroupName    || '').then(r => ({ d, r }))))
     ]);
 
-    // Merge AI results back into the response arrays.
-    // Why confidence stays 'medium' for AI? See note in aiMatchItem: AI confidence
-    // is not the same as Dice confidence. We always force human review for AI output.
+    // ── Merge Step 2 results ──────────────────────────────────────────────
     for (const { t, r } of dishAI) {
       if (!r) continue;
       if (t._fromReview) {
@@ -166,6 +175,29 @@ app.post('/api/match', async (req, res) => {
       } else {
         optionItems.push({ choiceGroupId: t.choiceGroupId, choiceItemId: t.choiceItemId, posItemId: r.match.posId, choiceName: t.choiceName, posName: r.match.name, price: t.price, posPrice: r.match.price, confidence: 'medium', choiceGroupName: t.choiceGroupName || '', posGroupName: r.match.groupName || '', aiSuggested: true, aiReason: r.reason, aiConfidence: r.confidence });
       }
+    }
+
+    // ── Step 3: downgrade high-confidence Dice matches AI disagrees with ──
+    for (const { d, r } of verifyDish) {
+      if (r && r.match.posId === d.posId) continue; // AI confirms — keep high
+      d.confidence = 'medium';
+      d.aiSuggested = true;
+      d.aiReason = r ? `AI: можливо "${r.match.name}"` : 'AI: схожість підозріла';
+      d.aiConfidence = r ? r.confidence : 'low';
+    }
+    for (const { d, r } of verifyCat) {
+      if (r && r.match.posId === d.posId) continue;
+      d.confidence = 'medium';
+      d.aiSuggested = true;
+      d.aiReason = r ? `AI: можливо "${r.match.name}"` : 'AI: схожість підозріла';
+      d.aiConfidence = r ? r.confidence : 'low';
+    }
+    for (const { d, r } of verifyOpt) {
+      if (r && r.match.posId === d.posItemId) continue;
+      d.confidence = 'medium';
+      d.aiSuggested = true;
+      d.aiReason = r ? `AI: можливо "${r.match.name}"` : 'AI: схожість підозріла';
+      d.aiConfidence = r ? r.confidence : 'low';
     }
   }
 
