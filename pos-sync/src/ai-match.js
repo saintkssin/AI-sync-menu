@@ -30,7 +30,7 @@ function topNCandidates(choiceName, posItems) {
     .slice(0, TOP_N);
 }
 
-function buildPrompt(choiceName, choicePrice, candidates, isCat) {
+function buildPrompt(choiceName, choicePrice, candidates, isCat, groupContext = '') {
   const priceStr = !isCat && choicePrice != null ? ` (${choicePrice} грн)` : '';
 
   // Why enumerate valid posIds in the Rules? LLMs sometimes generate ids that look
@@ -40,13 +40,18 @@ function buildPrompt(choiceName, choicePrice, candidates, isCat) {
 
   const candidateLines = candidates.map((c, i) => {
     const price = !isCat && c.price != null ? ` (${c.price} грн)` : '';
-    return `  ${i + 1}. posId="${c.posId}"  name="${c.name}"${price}  dice=${c._score.toFixed(2)}`;
+    const grp = c.groupName ? `  group="${c.groupName}"` : '';
+    const cat = c.category ? `  category="${c.category}"` : '';
+    return `  ${i + 1}. posId="${c.posId}"  name="${c.name}"${grp}${cat}${price}  dice=${c._score.toFixed(2)}`;
   });
 
-  return [
+  const lines = [
     'You are a restaurant menu matching assistant. Reply ONLY with a single JSON object — no markdown, no extra text.',
     '',
     `Menu item to match: "${choiceName}"${priceStr}`,
+  ];
+  if (groupContext) lines.push(`Context: this item belongs to group/category "${groupContext}". Prefer candidates with the same or similar group name.`);
+  lines.push(
     '',
     'POS candidates (pick one posId or return null):',
     ...candidateLines,
@@ -59,7 +64,8 @@ function buildPrompt(choiceName, choicePrice, candidates, isCat) {
     '',
     'Output (JSON only):',
     '{"posId": "<value or null>", "confidence": "high|medium|low", "reason": "<text>"}'
-  ].join('\n');
+  );
+  return lines.join('\n');
 }
 
 // Why validate posId membership explicitly?
@@ -124,13 +130,13 @@ async function callClaude(prompt) {
 // non-negotiable human safety gate for all AI output.
 //
 // null return means: item stays in unmatched, no UI noise for hopeless cases.
-async function aiMatchItem(choiceName, choicePrice, posItems, isCat = false) {
+async function aiMatchItem(choiceName, choicePrice, posItems, isCat = false, groupContext = '') {
   if (!ENABLED) return null;
 
   const candidates = topNCandidates(choiceName, posItems);
   if (!candidates.length) return null;
 
-  const basePrompt = buildPrompt(choiceName, choicePrice, candidates, isCat);
+  const basePrompt = buildPrompt(choiceName, choicePrice, candidates, isCat, groupContext);
   const logCtx     = { item: choiceName, candidates: candidates.map(c => `${c.posId}(${c._score.toFixed(2)})`) };
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {

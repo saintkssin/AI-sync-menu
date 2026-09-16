@@ -31,7 +31,9 @@ function findBestFuzzyMatch(choiceItem, posItems, isCat = false) {
   }
   if (bestMatch) {
     const priceMatch = isCat ? true : Math.abs((bestMatch.price || 0) - (choiceItem.price || 0)) <= 50;
-    return { match: bestMatch, confidence: (maxScore > 0.4 && priceMatch) ? 'high' : 'medium' };
+    // Multiple POS items with the same top score = ambiguous match → always medium so AI can resolve
+    const tieCount = posItems.filter(pi => diceCoefficient(cName, pi.name) === maxScore).length;
+    return { match: bestMatch, confidence: (maxScore > 0.4 && priceMatch && tieCount === 1) ? 'high' : 'medium' };
   }
   return null;
 }

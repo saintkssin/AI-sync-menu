@@ -708,6 +708,7 @@
       <div>
         <div class="mm-title">Ручне зіставлення</div>
         <div class="mm-choice-name" id="mmChoiceName"></div>
+        <div id="mmChoiceCategory" style="font-size:10px;color:var(--accent);margin-top:2px;display:none"></div>
       </div>
       <button class="btn btn-ghost" style="padding:4px 12px;font-size:12px" onclick="closeManualMatch()">✕</button>
     </div>
@@ -891,9 +892,10 @@ function handleFile(file) {
       if (cat.startsWith('[Modificators]')) {
         const [groupId, itemId] = posId.includes('**') ? posId.split('**') : [posId, posId];
         const cleanName = name.replace(/^Multi\s+/i, '').trim();
+        const groupName = cat.replace('[Modificators]', '').trim();
         const groupKey = catPosId;
         if (!multiModifiers[groupKey]) multiModifiers[groupKey] = [];
-        multiModifiers[groupKey].push({ itemPosId: itemId, groupPosId: groupId, name: cleanName, price });
+        multiModifiers[groupKey].push({ itemPosId: itemId, groupPosId: groupId, name: cleanName, price, groupName });
         continue;
       }
 
@@ -912,7 +914,20 @@ function handleFile(file) {
     dishes.forEach(d => { catMap[d.categoryPosId] = d.category; });
     const categories = Object.entries(catMap).map(([id, name]) => ({ posId: id, name }));
 
-    const modItemsList = Object.values(simpleModifiers);
+    // Group header rows (posId === groupPosId) store the group name — use them to enrich items
+    const simpleGroupNameMap = {};
+    Object.values(simpleModifiers).forEach(item => {
+      if (item.posId === item.groupPosId) simpleGroupNameMap[item.posId] = item.name;
+    });
+
+    // Unified modifier item list: simple (excluding group-header rows) + multi, all with groupName
+    const modItemsList = [
+      ...Object.values(simpleModifiers)
+        .filter(item => item.posId !== item.groupPosId)
+        .map(item => ({ ...item, groupName: simpleGroupNameMap[item.groupPosId] || '' })),
+      ...Object.values(multiModifiers).flat()
+        .map(item => ({ posId: item.itemPosId, groupPosId: item.groupPosId, name: item.name, price: item.price, groupName: item.groupName || '' }))
+    ];
 
     const modGroups = Object.entries(multiModifiers).map(([groupChoicePosId, items]) => ({
       groupChoicePosId,
@@ -924,14 +939,14 @@ function handleFile(file) {
       dishes,
       modifierGroups: modGroups,
       modItemsList,
-      rawModifiers: [...Object.values(simpleModifiers), ...Object.values(multiModifiers).flat()]
+      rawModifiers: modItemsList
     };
 
     document.getElementById('posStats').classList.remove('hidden');
     document.getElementById('posStatsRow').innerHTML = `
       <div class="stat-card"><div class="stat-value">${categories.length}</div><div class="stat-label">Категорій</div></div>
-      <div class="stat-card"><div class="stat-value">${dishes.length}</div><div class="stat-label">Striav</div></div>
-      <div class="stat-card"><div class="stat-value">${modGroups.length}</div><div class="stat-label">Grup</div></div>
+      <div class="stat-card"><div class="stat-value">${dishes.length}</div><div class="stat-label">Страв</div></div>
+      <div class="stat-card"><div class="stat-value">${modGroups.length}</div><div class="stat-label">Груп опцій</div></div>
       <div class="stat-card"><div class="stat-value">${modItemsList.length}</div><div class="stat-label">Опцій</div></div>
     `;
   };
@@ -1053,7 +1068,7 @@ async function callGeminiMatch(choiceDishes, posDishes, choiceCats, posCats, cho
   }));
   
   const posDishList = posDishes.map(d => ({
-    posId: d.posId, name: d.name, price: d.price
+    posId: d.posId, name: d.name, price: d.price, category: d.category
   }));
   
   const choiceCatList = choiceCats.map(c => ({ 
@@ -1092,8 +1107,9 @@ choiceOpts.forEach(og => {
       groupId: og._id,
       itemId: item._id,
       name: finalName,
-        price: Math.round(item.price / 100) 
-      });
+      groupName: getChoiceName(og, ''),
+      price: Math.round(item.price / 100)
+    });
     });
   });
   const posModItemList = (state.posMenu.modItemsList || []);
@@ -1122,7 +1138,7 @@ choiceOpts.forEach(og => {
   (parsed.dishes || []).forEach(m => {
     matchedDishIds.add(m.choiceId);
     const ai   = m.aiSuggested ? { aiSuggested: true, aiReason: m.aiReason, aiConfidence: m.aiConfidence } : {};
-    const item = { type: 'dish', choiceId: m.choiceId, posId: m.posId, choiceName: m.choiceName, posName: m.posName, price: m.price, confidence: m.confidence, ...ai };
+    const item = { type: 'dish', choiceId: m.choiceId, posId: m.posId, choiceName: m.choiceName, posName: m.posName, price: m.price, confidence: m.confidence, choiceCategoryName: m.choiceCategoryName || '', posCategoryName: m.posCategoryName || '', ...ai };
     if (m.confidence === 'high') matched.push(item); else review.push({ ...item, approved: null });
   });
 
@@ -1136,7 +1152,7 @@ choiceOpts.forEach(og => {
   (parsed.optionItems || []).forEach(m => {
     matchedOptIds.add(m.choiceItemId);
     const ai   = m.aiSuggested ? { aiSuggested: true, aiReason: m.aiReason, aiConfidence: m.aiConfidence } : {};
-    const item = { type: 'option', choiceGroupId: m.choiceGroupId, choiceId: m.choiceItemId, posId: m.posItemId, choiceName: m.choiceName, posName: m.posName, price: m.price, confidence: m.confidence, ...ai };
+    const item = { type: 'option', choiceGroupId: m.choiceGroupId, choiceId: m.choiceItemId, posId: m.posItemId, choiceName: m.choiceName, posName: m.posName, price: m.price, confidence: m.confidence, choiceGroupName: m.choiceGroupName || '', posGroupName: m.posGroupName || '', ...ai };
     if (m.confidence === 'high') matched.push(item); else review.push({ ...item, approved: null });
   });
 
@@ -1151,7 +1167,7 @@ choiceOpts.forEach(og => {
   });
   choiceOpts.forEach(og => {
     (og.optionList || []).forEach(item => {
-      if (!matchedOptIds.has(item._id)) unmatched.push({ type: 'option', choiceGroupId: og._id, choiceId: item._id, choiceName: getChoiceName(item, 'Без назви'), price: Math.round(item.price / 100), reason: 'Не знайдено відповідність' });
+      if (!matchedOptIds.has(item._id)) unmatched.push({ type: 'option', choiceGroupId: og._id, choiceId: item._id, choiceName: getChoiceName(item, 'Без назви'), choiceGroupName: getChoiceName(og, ''), price: Math.round(item.price / 100), reason: 'Не знайдено відповідність' });
     });
   });
 
@@ -1172,10 +1188,12 @@ function renderResults() {
   } else {
     document.getElementById('matchedEmpty').classList.add('hidden');
     matched.forEach(m => {
+      const choiceSub = m.choiceCategoryName || m.choiceGroupName || '';
+      const posSub    = m.posCategoryName    || m.posGroupName    || '';
       mb.innerHTML += `<tr>
         <td>${typeBadge(m.type)}</td>
-        <td>${esc(m.choiceName)}</td>
-        <td>${esc(m.posName)}</td>
+        <td>${esc(m.choiceName)}${choiceSub ? `<div style="font-size:10px;color:var(--accent);margin-top:2px">${esc(choiceSub)}</div>` : ''}</td>
+        <td>${esc(m.posName)}${posSub ? `<div style="font-size:10px;color:var(--text3);margin-top:2px">${esc(posSub)}</div>` : ''}</td>
         <td style="font-family:var(--mono);font-size:12px">${m.price ?? '—'}</td>
         <td><div class="pos-id">${esc(m.posId)}</div></td>
         <td><span class="badge badge-high">high</span></td>
@@ -1190,12 +1208,14 @@ function renderResults() {
   } else {
     document.getElementById('reviewEmpty').classList.add('hidden');
     review.forEach((m, i) => {
+      const choiceSub = m.choiceCategoryName || m.choiceGroupName || '';
+      const posSub    = m.posCategoryName    || m.posGroupName    || '';
       rb.innerHTML += `<tr id="reviewRow${i}">
         <td>${typeBadge(m.type)}</td>
-        <td>${esc(m.choiceName)}</td>
+        <td>${esc(m.choiceName)}${choiceSub ? `<div style="font-size:10px;color:var(--accent);margin-top:2px">${esc(choiceSub)}</div>` : ''}</td>
         <td>
-          ${esc(m.posName)}
-          ${m.aiSuggested ? `<div class="ai-badge">🤖 AI пропонує: ${esc(m.aiReason || '')}</div>` : ''}
+          ${esc(m.posName)}${posSub ? `<div style="font-size:10px;color:var(--text3);margin-top:2px">${esc(posSub)}</div>` : ''}
+          ${m.aiSuggested ? `<div class="ai-badge">🤖 ${esc(m.aiReason || '')}</div>` : ''}
         </td>
         <td style="font-family:var(--mono);font-size:12px">${m.price ?? '—'}</td>
         <td><div class="pos-id">${esc(m.posId)}</div></td>
@@ -1264,6 +1284,7 @@ function renderResults() {
         ub.innerHTML += `<div class="unmatched-item" style="padding: 10px 12px;display:flex;justify-content:space-between;align-items:center">
           <div>
             <div class="unmatched-name">${esc(u.choiceName)}${u.price ? `<span style="color:var(--text3);font-size:11px;margin-left:6px">${u.price} грн</span>` : ''}</div>
+            ${u.choiceGroupName ? `<div style="font-size:10px;color:var(--accent);margin-top:2px">${esc(u.choiceGroupName)}</div>` : ''}
             <div class="unmatched-reason">${esc(u.reason)}</div>
           </div>
           <button class="btn-search" onclick="openManualMatchById('${u.choiceId}','option')">🔍 Знайти</button>
@@ -1489,6 +1510,10 @@ function openManualMatch(source, index, itemType) {
   mmCtx = { source, index, itemType };
   const item = source === 'review' ? state.results.review[index] : state.results.unmatched[index];
   document.getElementById('mmChoiceName').textContent = item.choiceName;
+  const catName = item.choiceCategoryName || item.choiceGroupName || '';
+  const catEl = document.getElementById('mmChoiceCategory');
+  catEl.textContent = catName;
+  catEl.style.display = catName ? '' : 'none';
   document.getElementById('mmSearchInput').value = '';
   renderMmResults('');
   document.getElementById('manualMatchModal').classList.remove('hidden');
@@ -1520,7 +1545,11 @@ function renderMmResults(query) {
   list.innerHTML = mmFiltered.slice(0, 100).map((item, i) => `
     <div class="mm-item" onclick="confirmManualMatch(${i})">
       <div class="mm-item-name">${esc(item.name)}</div>
-      <div class="mm-item-meta">${esc(item.posId)}${item.price ? '<br>' + item.price + ' грн' : ''}</div>
+      <div class="mm-item-meta">
+        ${item.category ? `<span style="color:var(--accent)">${esc(item.category)}</span><br>` : ''}
+        ${item.groupName ? `<span style="color:var(--accent)">${esc(item.groupName)}</span><br>` : ''}
+        ${esc(item.posId)}${item.price ? '<br>' + item.price + ' грн' : ''}
+      </div>
     </div>
   `).join('');
 }

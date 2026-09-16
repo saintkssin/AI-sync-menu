@@ -86,7 +86,7 @@ app.post('/api/match', async (req, res) => {
     const fuzzy = findBestFuzzyMatch(cd, posDishes, false);
     if (fuzzy) {
       matchedDishIds.add(cd.id);
-      dishes.push({ choiceId: cd.id, posId: fuzzy.match.posId, choiceName: cd.name || 'Без назви', posName: fuzzy.match.name, price: cd.price, confidence: fuzzy.confidence });
+      dishes.push({ choiceId: cd.id, posId: fuzzy.match.posId, choiceName: cd.name || 'Без назви', posName: fuzzy.match.name, price: cd.price, confidence: fuzzy.confidence, choiceCategoryName: cd.categoryName || '', posCategoryName: fuzzy.match.category || '' });
     }
   });
 
@@ -102,7 +102,7 @@ app.post('/api/match', async (req, res) => {
     const fuzzy = findBestFuzzyMatch(co, posModifierItems, false);
     if (fuzzy) {
       matchedOptIds.add(co.itemId);
-      optionItems.push({ choiceGroupId: co.groupId, choiceItemId: co.itemId, posItemId: fuzzy.match.posId, choiceName: co.name || 'Без назви', posName: fuzzy.match.name, price: co.price, confidence: fuzzy.confidence });
+      optionItems.push({ choiceGroupId: co.groupId, choiceItemId: co.itemId, posItemId: fuzzy.match.posId, choiceName: co.name || 'Без назви', posName: fuzzy.match.name, price: co.price, confidence: fuzzy.confidence, choiceGroupName: co.groupName || '', posGroupName: fuzzy.match.groupName || '' });
     }
   });
 
@@ -113,7 +113,7 @@ app.post('/api/match', async (req, res) => {
     const dishTargets = [
       ...dishes.filter(d => d.confidence === 'medium').map(d => ({ ...d, _fromReview: true })),
       ...(choiceDishes || []).filter(cd => !matchedDishIds.has(cd.id)).map(cd => ({
-        choiceId: cd.id, choiceName: cd.name || 'Без назви', price: cd.price, _fromReview: false
+        choiceId: cd.id, choiceName: cd.name || 'Без назви', choiceCategoryName: cd.categoryName || '', price: cd.price, _fromReview: false
       }))
     ];
     const catTargets = [
@@ -125,16 +125,16 @@ app.post('/api/match', async (req, res) => {
     const optTargets = [
       ...optionItems.filter(o => o.confidence === 'medium').map(o => ({ ...o, _fromReview: true })),
       ...(choiceOptionItems || []).filter(co => !matchedOptIds.has(co.itemId)).map(co => ({
-        choiceGroupId: co.groupId, choiceItemId: co.itemId, choiceName: co.name || 'Без назви', price: co.price, _fromReview: false
+        choiceGroupId: co.groupId, choiceItemId: co.itemId, choiceName: co.name || 'Без назви', choiceGroupName: co.groupName || '', price: co.price, _fromReview: false
       }))
     ];
 
     // Run all AI calls in parallel.
     // ponytail: no concurrency limit; add p-limit if menus exceed ~150 unmatched items
     const [dishAI, catAI, optAI] = await Promise.all([
-      Promise.all(dishTargets.map(t => aiMatchItem(t.choiceName, t.price,     posDishes || [],        false).then(r => ({ t, r })))),
+      Promise.all(dishTargets.map(t => aiMatchItem(t.choiceName, t.price,     posDishes || [],        false, t.choiceCategoryName || '').then(r => ({ t, r })))),
       Promise.all(catTargets .map(t => aiMatchItem(t.choiceName, null,        posCategories || [],    true ).then(r => ({ t, r })))),
-      Promise.all(optTargets .map(t => aiMatchItem(t.choiceName, t.price,     posModifierItems || [], false).then(r => ({ t, r }))))
+      Promise.all(optTargets .map(t => aiMatchItem(t.choiceName, t.price,     posModifierItems || [], false, t.choiceGroupName || '').then(r => ({ t, r }))))
     ]);
 
     // Merge AI results back into the response arrays.
@@ -143,11 +143,10 @@ app.post('/api/match', async (req, res) => {
     for (const { t, r } of dishAI) {
       if (!r) continue;
       if (t._fromReview) {
-        // Update existing medium-confidence Dice item with AI's (possibly better) suggestion
         const existing = dishes.find(d => d.choiceId === t.choiceId);
-        if (existing) Object.assign(existing, { posId: r.match.posId, posName: r.match.name, aiSuggested: true, aiReason: r.reason, aiConfidence: r.confidence });
+        if (existing) Object.assign(existing, { posId: r.match.posId, posName: r.match.name, posCategoryName: r.match.category || '', aiSuggested: true, aiReason: r.reason, aiConfidence: r.confidence });
       } else {
-        dishes.push({ choiceId: t.choiceId, posId: r.match.posId, choiceName: t.choiceName, posName: r.match.name, price: t.price, confidence: 'medium', aiSuggested: true, aiReason: r.reason, aiConfidence: r.confidence });
+        dishes.push({ choiceId: t.choiceId, posId: r.match.posId, choiceName: t.choiceName, posName: r.match.name, price: t.price, confidence: 'medium', choiceCategoryName: t.choiceCategoryName || '', posCategoryName: r.match.category || '', aiSuggested: true, aiReason: r.reason, aiConfidence: r.confidence });
       }
     }
     for (const { t, r } of catAI) {
@@ -163,9 +162,9 @@ app.post('/api/match', async (req, res) => {
       if (!r) continue;
       if (t._fromReview) {
         const existing = optionItems.find(o => o.choiceItemId === t.choiceItemId);
-        if (existing) Object.assign(existing, { posItemId: r.match.posId, posName: r.match.name, aiSuggested: true, aiReason: r.reason, aiConfidence: r.confidence });
+        if (existing) Object.assign(existing, { posItemId: r.match.posId, posName: r.match.name, posGroupName: r.match.groupName || '', aiSuggested: true, aiReason: r.reason, aiConfidence: r.confidence });
       } else {
-        optionItems.push({ choiceGroupId: t.choiceGroupId, choiceItemId: t.choiceItemId, posItemId: r.match.posId, choiceName: t.choiceName, posName: r.match.name, price: t.price, confidence: 'medium', aiSuggested: true, aiReason: r.reason, aiConfidence: r.confidence });
+        optionItems.push({ choiceGroupId: t.choiceGroupId, choiceItemId: t.choiceItemId, posItemId: r.match.posId, choiceName: t.choiceName, posName: r.match.name, price: t.price, confidence: 'medium', choiceGroupName: t.choiceGroupName || '', posGroupName: r.match.groupName || '', aiSuggested: true, aiReason: r.reason, aiConfidence: r.confidence });
       }
     }
   }
