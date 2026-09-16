@@ -626,6 +626,7 @@
           <table>
             <thead>
               <tr>
+                <th style="width:32px"><input type="checkbox" id="matchedSelectAll" checked onchange="toggleAllMatched(this.checked)" title="Вибрати всі"></th>
                 <th>Тип</th>
                 <th>Назва в Choice</th>
                 <th>Назва в POS</th>
@@ -1198,10 +1199,11 @@ function renderResults() {
     document.getElementById('matchedEmpty').classList.remove('hidden');
   } else {
     document.getElementById('matchedEmpty').classList.add('hidden');
-    matched.forEach(m => {
+    matched.forEach((m, i) => {
       const choiceSub = m.choiceCategoryName || m.choiceGroupName || '';
       const posSub    = m.posCategoryName    || m.posGroupName    || '';
-      mb.innerHTML += `<tr>
+      mb.innerHTML += `<tr id="matchedRow${i}" style="${m.excluded ? 'opacity:0.4' : ''}">
+        <td><input type="checkbox" id="matchedCb${i}" ${m.excluded ? '' : 'checked'} onchange="toggleMatched(${i}, this.checked)"></td>
         <td>${typeBadge(m.type)}</td>
         <td>${esc(m.choiceName)}${choiceSub ? `<div style="font-size:10px;color:var(--accent);margin-top:2px">${esc(choiceSub)}</div>` : ''}</td>
         <td>${esc(m.posName)}${posSub ? `<div style="font-size:10px;color:var(--text3);margin-top:2px">${esc(posSub)}</div>` : ''}</td>
@@ -1337,13 +1339,39 @@ function reviewAction(i, approve) {
   updateApplyInfo();
 }
 
+function toggleMatched(i, checked) {
+  state.results.matched[i].excluded = !checked;
+  const row = document.getElementById('matchedRow' + i);
+  if (row) row.style.opacity = checked ? '' : '0.4';
+  // update "select all" checkbox state
+  const allChecked = state.results.matched.every(m => !m.excluded);
+  const allUnchecked = state.results.matched.every(m => m.excluded);
+  const sa = document.getElementById('matchedSelectAll');
+  if (sa) { sa.checked = allChecked; sa.indeterminate = !allChecked && !allUnchecked; }
+  updateApplyInfo();
+}
+
+function toggleAllMatched(checked) {
+  state.results.matched.forEach((m, i) => {
+    m.excluded = !checked;
+    const cb = document.getElementById('matchedCb' + i);
+    if (cb) cb.checked = checked;
+    const row = document.getElementById('matchedRow' + i);
+    if (row) row.style.opacity = checked ? '' : '0.4';
+  });
+  updateApplyInfo();
+}
+
 function updateApplyInfo() {
   const { matched, review } = state.results;
-  const approved = review.filter(r => r.approved === true).length;
-  const clearing = review.filter(r => r.clearId === true && r.approved !== true).length;
-  const total = matched.length + approved;
-  let info = `До застосування: ${total} позицій (${matched.length} авто + ${approved} підтверджено)`;
-  if (clearing > 0) info += ` · очистити posID: ${clearing}`;
+  const autoApply = matched.filter(m => !m.excluded).length;
+  const approved  = review.filter(r => r.approved === true).length;
+  const clearing  = review.filter(r => r.clearId === true && r.approved !== true).length;
+  const excluded  = matched.filter(m => m.excluded).length;
+  const total = autoApply + approved;
+  let info = `До застосування: ${total} позицій (${autoApply} авто + ${approved} підтверджено)`;
+  if (excluded > 0)  info += ` · пропущено: ${excluded}`;
+  if (clearing > 0)  info += ` · очистити posID: ${clearing}`;
   document.getElementById('applyInfo').textContent = info;
 }
 
@@ -1359,7 +1387,7 @@ function switchTab(tab) {
 async function applySync() {
   setStep(4);
   const toApply = [
-    ...state.results.matched,
+    ...state.results.matched.filter(m => !m.excluded),
     ...state.results.review.filter(r => r.approved === true),
     ...state.results.review.filter(r => r.clearId === true && r.approved !== true).map(r => ({ ...r, posId: null, _isClear: true }))
   ];
