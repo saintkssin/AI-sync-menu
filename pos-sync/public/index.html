@@ -575,7 +575,7 @@
           <div class="stats-row" id="posStatsRow"></div>
           <div style="margin-top:12px; display:flex; align-items:center; justify-content:flex-end; gap:16px">
             <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text2);cursor:pointer" title="Допомагає коли одна і та ж назва зустрічається в кількох категоріях">
-              <input type="checkbox" id="categoryBoostToggle" onchange="state.categoryBoost = this.checked">
+              <input type="checkbox" id="categoryBoostToggle" checked onchange="state.categoryBoost = this.checked">
               <span>Враховувати категорію при матчингу</span>
             </label>
             <button class="btn btn-primary" onclick="goToSync()">Запустити синхронізацію →</button>
@@ -734,7 +734,7 @@ const state = {
   posMenu: null,       // parsed from XLS
   results: null,       // { matched[], review[], unmatched[] }
   activeTab: 'matched',
-  categoryBoost: false
+  categoryBoost: true
 };
 
 const API_BASE = 'https://open-api.choiceqr.com';
