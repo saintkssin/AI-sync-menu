@@ -22,17 +22,26 @@ function diceCoefficient(str1, str2) {
   return (2.0 * intersection) / (s1.length + s2.length - 2);
 }
 
-function findBestFuzzyMatch(choiceItem, posItems, isCat = false) {
+function findBestFuzzyMatch(choiceItem, posItems, isCat = false, opts = {}) {
   let bestMatch = null, maxScore = 0;
-  const cName = choiceItem.name || choiceItem.choiceName || '';
+  const cName     = choiceItem.name || choiceItem.choiceName || '';
+  const cCat      = choiceItem.categoryName || choiceItem.groupName || '';
+  const boost     = opts.categoryBoost && !isCat;
   for (const pi of posItems) {
-    const score = diceCoefficient(cName, pi.name);
+    const nameScore = diceCoefficient(cName, pi.name);
+    const score = boost
+      ? 0.7 * nameScore + 0.3 * diceCoefficient(cCat, pi.category || pi.groupName || '')
+      : nameScore;
     if (score > maxScore) { maxScore = score; bestMatch = pi; }
   }
   if (bestMatch) {
     const priceMatch = isCat ? true : Math.abs((bestMatch.price || 0) - (choiceItem.price || 0)) <= 50;
     // Multiple POS items with the same top score = ambiguous match → always medium so AI can resolve
-    const tieCount = posItems.filter(pi => diceCoefficient(cName, pi.name) === maxScore).length;
+    const tieCount = posItems.filter(pi => {
+      const ns = diceCoefficient(cName, pi.name);
+      const s  = boost ? 0.7 * ns + 0.3 * diceCoefficient(cCat, pi.category || pi.groupName || '') : ns;
+      return s === maxScore;
+    }).length;
     return { match: bestMatch, confidence: (maxScore > 0.4 && priceMatch && tieCount === 1) ? 'high' : 'medium', score: maxScore };
   }
   return null;

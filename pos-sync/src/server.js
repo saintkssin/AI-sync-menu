@@ -70,7 +70,8 @@ app.all('/api/choice/*', async (req, res) => {
 // the suggestion using semantic understanding (synonyms, abbreviations, Ukrainian
 // transliterations) that bigram-based Dice can't see.
 app.post('/api/match', async (req, res) => {
-  const { choiceDishes, posDishes, choiceCategories, posCategories, choiceOptionItems, posModifierItems } = req.body;
+  const { choiceDishes, posDishes, choiceCategories, posCategories, choiceOptionItems, posModifierItems, categoryBoost } = req.body;
+  const diceOpts = { categoryBoost: !!categoryBoost };
 
   // ── Step 1: Dice matching ─────────────────────────────────────────────────
   const dishes      = [];
@@ -83,7 +84,7 @@ app.post('/api/match', async (req, res) => {
   const matchedOptIds  = new Set();
 
   (choiceDishes || []).forEach(cd => {
-    const fuzzy = findBestFuzzyMatch(cd, posDishes, false);
+    const fuzzy = findBestFuzzyMatch(cd, posDishes, false, diceOpts);
     if (fuzzy) {
       matchedDishIds.add(cd.id);
       dishes.push({ choiceId: cd.id, posId: fuzzy.match.posId, choiceName: cd.name || 'Без назви', posName: fuzzy.match.name, price: cd.price, posPrice: fuzzy.match.price, confidence: fuzzy.confidence, _diceScore: fuzzy.score, choiceCategoryName: cd.categoryName || '', posCategoryName: fuzzy.match.category || '' });
@@ -91,7 +92,7 @@ app.post('/api/match', async (req, res) => {
   });
 
   (choiceCategories || []).forEach(cc => {
-    const fuzzy = findBestFuzzyMatch(cc, posCategories, true);
+    const fuzzy = findBestFuzzyMatch(cc, posCategories, true, diceOpts);
     if (fuzzy) {
       matchedCatIds.add(cc.id);
       categories.push({ choiceId: cc.id, posId: fuzzy.match.posId, choiceName: cc.name || 'Без назви', posName: fuzzy.match.name, confidence: fuzzy.confidence });
@@ -99,7 +100,7 @@ app.post('/api/match', async (req, res) => {
   });
 
   (choiceOptionItems || []).forEach(co => {
-    const fuzzy = findBestFuzzyMatch(co, posModifierItems, false);
+    const fuzzy = findBestFuzzyMatch(co, posModifierItems, false, diceOpts);
     if (fuzzy) {
       matchedOptIds.add(co.itemId);
       optionItems.push({ choiceGroupId: co.groupId, choiceItemId: co.itemId, posItemId: fuzzy.match.posId, choiceName: co.name || 'Без назви', posName: fuzzy.match.name, price: co.price, posPrice: fuzzy.match.price, confidence: fuzzy.confidence, _diceScore: fuzzy.score, choiceGroupName: co.groupName || '', posGroupName: fuzzy.match.groupName || '' });
