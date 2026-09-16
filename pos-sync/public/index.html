@@ -629,7 +629,7 @@
                 <th>Тип</th>
                 <th>Назва в Choice</th>
                 <th>Назва в POS</th>
-                <th>Ціна</th>
+                <th>Ціна<br><span style="font-weight:normal;font-size:9px;color:var(--text3)">Choice / POS</span></th>
                 <th>POS ID</th>
                 <th>Впевненість</th>
               </tr>
@@ -648,7 +648,7 @@
                 <th>Тип</th>
                 <th>Назва в Choice</th>
                 <th>Назва в POS</th>
-                <th>Ціна</th>
+                <th>Ціна<br><span style="font-weight:normal;font-size:9px;color:var(--text3)">Choice / POS</span></th>
                 <th>POS ID</th>
                 <th>Дія</th>
               </tr>
@@ -907,6 +907,15 @@ function handleFile(file) {
         continue;
       }
 
+      if (/^options:/i.test(cat)) {
+        const groupName = cat.replace(/^options:\s*/i, '').trim();
+        const groupKey = catPosId || groupName;
+        const cleanName = name.replace(/^\d+\s*x\s+/i, '').replace(/\s*\[.*?\]\s*\(.*?\)\s*$/i, '').trim() || name;
+        if (!multiModifiers[groupKey]) multiModifiers[groupKey] = [];
+        multiModifiers[groupKey].push({ itemPosId: posId, groupPosId: catPosId, name: cleanName, price, groupName });
+        continue;
+      }
+
       dishes.push({ posId, name, category: cat, price, categoryPosId: catPosId });
     }
 
@@ -921,13 +930,15 @@ function handleFile(file) {
     });
 
     // Unified modifier item list: simple (excluding group-header rows) + multi, all with groupName
+    // Deduplicate by posId — Options: format repeats the same item across many delivery-platform groups
+    const _seenModIds = new Set();
     const modItemsList = [
       ...Object.values(simpleModifiers)
         .filter(item => item.posId !== item.groupPosId)
         .map(item => ({ ...item, groupName: simpleGroupNameMap[item.groupPosId] || '' })),
       ...Object.values(multiModifiers).flat()
         .map(item => ({ posId: item.itemPosId, groupPosId: item.groupPosId, name: item.name, price: item.price, groupName: item.groupName || '' }))
-    ];
+    ].filter(item => { if (_seenModIds.has(item.posId)) return false; _seenModIds.add(item.posId); return true; });
 
     const modGroups = Object.entries(multiModifiers).map(([groupChoicePosId, items]) => ({
       groupChoicePosId,
@@ -1138,7 +1149,7 @@ choiceOpts.forEach(og => {
   (parsed.dishes || []).forEach(m => {
     matchedDishIds.add(m.choiceId);
     const ai   = m.aiSuggested ? { aiSuggested: true, aiReason: m.aiReason, aiConfidence: m.aiConfidence } : {};
-    const item = { type: 'dish', choiceId: m.choiceId, posId: m.posId, choiceName: m.choiceName, posName: m.posName, price: m.price, confidence: m.confidence, choiceCategoryName: m.choiceCategoryName || '', posCategoryName: m.posCategoryName || '', ...ai };
+    const item = { type: 'dish', choiceId: m.choiceId, posId: m.posId, choiceName: m.choiceName, posName: m.posName, price: m.price, posPrice: m.posPrice, confidence: m.confidence, choiceCategoryName: m.choiceCategoryName || '', posCategoryName: m.posCategoryName || '', ...ai };
     if (m.confidence === 'high') matched.push(item); else review.push({ ...item, approved: null });
   });
 
@@ -1152,7 +1163,7 @@ choiceOpts.forEach(og => {
   (parsed.optionItems || []).forEach(m => {
     matchedOptIds.add(m.choiceItemId);
     const ai   = m.aiSuggested ? { aiSuggested: true, aiReason: m.aiReason, aiConfidence: m.aiConfidence } : {};
-    const item = { type: 'option', choiceGroupId: m.choiceGroupId, choiceId: m.choiceItemId, posId: m.posItemId, choiceName: m.choiceName, posName: m.posName, price: m.price, confidence: m.confidence, choiceGroupName: m.choiceGroupName || '', posGroupName: m.posGroupName || '', ...ai };
+    const item = { type: 'option', choiceGroupId: m.choiceGroupId, choiceId: m.choiceItemId, posId: m.posItemId, choiceName: m.choiceName, posName: m.posName, price: m.price, posPrice: m.posPrice, confidence: m.confidence, choiceGroupName: m.choiceGroupName || '', posGroupName: m.posGroupName || '', ...ai };
     if (m.confidence === 'high') matched.push(item); else review.push({ ...item, approved: null });
   });
 
@@ -1194,7 +1205,7 @@ function renderResults() {
         <td>${typeBadge(m.type)}</td>
         <td>${esc(m.choiceName)}${choiceSub ? `<div style="font-size:10px;color:var(--accent);margin-top:2px">${esc(choiceSub)}</div>` : ''}</td>
         <td>${esc(m.posName)}${posSub ? `<div style="font-size:10px;color:var(--text3);margin-top:2px">${esc(posSub)}</div>` : ''}</td>
-        <td style="font-family:var(--mono);font-size:12px">${m.price ?? '—'}</td>
+        <td style="font-family:var(--mono);font-size:12px;white-space:nowrap">${m.price ?? '—'}${m.posPrice != null ? `<br><span style="color:var(--text3)">${m.posPrice}</span>` : ''}</td>
         <td><div class="pos-id">${esc(m.posId)}</div></td>
         <td><span class="badge badge-high">high</span></td>
       </tr>`;
@@ -1217,7 +1228,7 @@ function renderResults() {
           ${esc(m.posName)}${posSub ? `<div style="font-size:10px;color:var(--text3);margin-top:2px">${esc(posSub)}</div>` : ''}
           ${m.aiSuggested ? `<div class="ai-badge">🤖 ${esc(m.aiReason || '')}</div>` : ''}
         </td>
-        <td style="font-family:var(--mono);font-size:12px">${m.price ?? '—'}</td>
+        <td style="font-family:var(--mono);font-size:12px;white-space:nowrap">${m.price ?? '—'}${m.posPrice != null ? `<br><span style="color:var(--text3)">${m.posPrice}</span>` : ''}</td>
         <td><div class="pos-id">${esc(m.posId)}</div></td>
         <td>
           <button class="btn-confirm approve" onclick="reviewAction(${i}, true)" id="approveBtn${i}">✓ Так</button>
@@ -1452,10 +1463,10 @@ function addApplyLog(name, status) {
 function downloadReport() {
   if (!state.results) return;
   const { matched, review, unmatched } = state.results;
-  const rows = [['Статус', 'Тип', 'Назва Choice', 'Назва POS', 'Ціна', 'POS ID', 'Впевненість', 'Причина']];
-  matched.forEach(m => rows.push(['matched', m.type, m.choiceName, m.posName, m.price ?? '', m.posId, m.confidence, '']));
-  review.forEach(m => rows.push([m.approved === true ? 'approved' : m.approved === false ? 'rejected' : 'review', m.type, m.choiceName, m.posName, m.price ?? '', m.posId, m.confidence, '']));
-  unmatched.forEach(u => rows.push(['unmatched', u.type, u.choiceName, '', u.price ?? '', '', '', u.reason]));
+  const rows = [['Статус', 'Тип', 'Назва Choice', 'Назва POS', 'Ціна Choice', 'Ціна POS', 'POS ID', 'Впевненість', 'Причина']];
+  matched.forEach(m => rows.push(['matched', m.type, m.choiceName, m.posName, m.price ?? '', m.posPrice ?? '', m.posId, m.confidence, '']));
+  review.forEach(m => rows.push([m.approved === true ? 'approved' : m.approved === false ? 'rejected' : 'review', m.type, m.choiceName, m.posName, m.price ?? '', m.posPrice ?? '', m.posId, m.confidence, '']));
+  unmatched.forEach(u => rows.push(['unmatched', u.type, u.choiceName, '', u.price ?? '', '', '', '', u.reason]));
 
   const ws = XLSX.utils.aoa_to_sheet(rows);
   const wb = XLSX.utils.book_new();
@@ -1562,7 +1573,7 @@ function confirmManualMatch(i) {
 
   if (source === 'review') {
     const rev = state.results.review[index];
-    state.results.matched.push({ ...rev, posId: posItem.posId, posName: posItem.name, confidence: 'high' });
+    state.results.matched.push({ ...rev, posId: posItem.posId, posName: posItem.name, posPrice: posItem.price, confidence: 'high' });
     state.results.review.splice(index, 1);
   } else {
     const um = state.results.unmatched[index];
@@ -1574,6 +1585,7 @@ function confirmManualMatch(i) {
       choiceName: um.choiceName,
       posName: posItem.name,
       price: um.price ?? posItem.price,
+      posPrice: posItem.price,
       confidence: 'high'
     });
     state.results.unmatched.splice(index, 1);
